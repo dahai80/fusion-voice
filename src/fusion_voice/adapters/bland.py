@@ -115,13 +115,47 @@ class BlandAdapter(HttpAdapterMixin):
         return {"results": formatted}
 
     async def deploy_assistant(self, spec: AssistantSpec) -> AssistantRef:
-        raise NotImplementedError("bland deploy_assistant lands in M2 (PRD section 10)")
+        payload: dict[str, Any] = {"name": spec.name}
+        if spec.prompt:
+            payload["prompt"] = spec.prompt
+        if spec.model:
+            payload["model"] = spec.model
+        if spec.voice:
+            payload["voice"] = spec.voice
+        if spec.transcriber:
+            payload["transcriber"] = spec.transcriber
+        if spec.tools:
+            payload["tools"] = [
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    **tool.metadata,
+                }
+                for tool in spec.tools
+            ]
+        payload.update(spec.platform_extra)
+
+        deploy_path = self.config.get("deploy_path") or "/v1/agents"
+        assistant_id = spec.metadata.get("assistant_id") or spec.metadata.get("agent_id")
+        if assistant_id:
+            response = self._request("PATCH", f"{deploy_path}/{assistant_id}", payload)
+        else:
+            response = self._request("POST", deploy_path, payload)
+        data = response.json()
+        resolved = str(data.get("assistant_id") or data.get("agent_id") or data.get("id") or assistant_id or "")
+        logger.info("bland assistant deployed id=%s", resolved)
+        return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 
     async def transfer_call(self, call_ref: CallRef, target: str) -> None:
-        raise NotImplementedError("bland transfer_call lands in M2 (PRD section 10)")
+        path = self.config.get("transfer_path") or f"/v1/calls/{call_ref.call_id}/transfer"
+        self._request("POST", path.format(call_id=call_ref.call_id), {"transfer_number": target})
+        logger.info("bland call transfer call_id=%s", call_ref.call_id)
 
     async def hang_up(self, call_ref: CallRef) -> None:
-        raise NotImplementedError("bland hang_up lands in M2 (PRD section 10)")
+        path = self.config.get("hang_up_path") or f"/v1/calls/{call_ref.call_id}/stop"
+        self._request("POST", path.format(call_id=call_ref.call_id))
+        logger.info("bland call hang_up call_id=%s", call_ref.call_id)
 
     async def fetch_call(self, call_ref: CallRef) -> CallRecord:
         response = self._request("GET", f"/v1/calls/{call_ref.call_id}")

@@ -11,6 +11,7 @@ from fusion_voice.credentials import CredentialError, CredentialProvider, resolv
 from fusion_voice.dispatch import WebhookResponse
 from fusion_voice.dispatch import dispatch as dispatch_webhook
 from fusion_voice.hooks import VoiceHooks
+from fusion_voice.metrics import VoiceMetrics
 from fusion_voice.models import VoiceEvent
 from fusion_voice.spi import AssistantRequestHandler, EventSink, ToolCallHandler, VoiceProvider
 
@@ -23,6 +24,7 @@ class VoiceRegistry:
         config: RootConfig,
         adapters: dict[str, VoiceProvider],
         hooks: VoiceHooks | None = None,
+        metrics: VoiceMetrics | None = None,
     ):
         self._config = config
         self._adapters = adapters
@@ -30,6 +32,7 @@ class VoiceRegistry:
         self._assistant_handler: AssistantRequestHandler | None = None
         self._event_sinks: list[EventSink] = []
         self.hooks = hooks or VoiceHooks()
+        self.metrics = metrics or VoiceMetrics()
 
     @classmethod
     def from_config(
@@ -38,6 +41,7 @@ class VoiceRegistry:
         credential_provider: CredentialProvider | None = None,
         hooks: VoiceHooks | None = None,
         provider_extra: dict[str, dict[str, Any]] | None = None,
+        metrics: VoiceMetrics | None = None,
     ) -> VoiceRegistry:
         config = load_config(source)
         extra = provider_extra or {}
@@ -57,11 +61,12 @@ class VoiceRegistry:
             adapter_config = {
                 "budgets": provider.budgets,
                 "inbound": provider.inbound,
+                **provider.options,
                 **(extra.get(provider_id) or {}),
             }
             adapters[provider_id] = adapter_cls(credentials=credentials, config=adapter_config)
         logger.info("registry built providers=%s", sorted(adapters))
-        return cls(config, adapters, hooks)
+        return cls(config, adapters, hooks, metrics)
 
     @property
     def assistant_handler(self) -> AssistantRequestHandler | None:

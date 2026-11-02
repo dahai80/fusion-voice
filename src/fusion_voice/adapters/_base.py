@@ -23,8 +23,14 @@ class HttpAdapterMixin:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         return httpx.Client(base_url=base_url, transport=transport, timeout=timeout, headers=headers)
 
-    def _request(self, method: str, path: str, json_body: dict[str, Any] | None = None) -> httpx.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> httpx.Response:
         with self._client() as client:
-            response = client.request(method, path, json=json_body)
+            response = client.request(method, path, json=json_body, data=data)
         response.raise_for_status()
         return response

@@ -2,7 +2,7 @@
 
 Fusion 生态的语音智能体平台接入层：用一套同步 SPI 与统一事件模型屏蔽托管语音平台差异。
 
-**状态：M1 已实现（2026-11-02）。** 热路径（webhook 验签、事件归一化、assistant-request 与 tool-call 同步响应）和冷路径（助理部署、呼叫转移、挂断、呼叫查询）已覆盖 Vapi、Retell、Bland。Vapi 冷路径功能完整；Retell/Bland 仅提供呼叫查询，部署/转移/挂断按 PRD 推迟到 M2。
+**状态：M2/M3 已实现（2026-11-02）。** 热路径（webhook 验签、事件归一化、assistant-request 与 tool-call 同步响应）、冷路径（助理部署、呼叫转移、挂断、呼叫查询）、五个平台 adapter、Prometheus 兼容指标均已落地。
 
 ## 安装
 
@@ -22,24 +22,28 @@ from fusion_voice.fastapi import build_voice_router
 
 registry = VoiceRegistry.from_config("voice.yaml")
 
+
 @registry.on_assistant_request
 async def on_assistant_request(ctx):
     return AssistantResponse(assistant_id="asst_123")
 
+
 @registry.on_tool_call("book_slot")
 async def book_slot(ctx, call):
     return ToolResult(tool_call_id=call.tool_call_id, name=call.name, result={"slot": call.args["slot"]})
+
 
 @registry.on_event
 def on_event(provider_id, event):
     # 呼叫开始/结束、状态更新、转移/挂断请求、未知事件
     ...
 
+
 app = FastAPI()
 app.include_router(build_voice_router(registry))
 ```
 
-`voice.yaml` 注册 provider、凭证引用与每个 provider 的时间预算，示例见 [examples/voice.yaml](examples/voice.yaml)。凭证支持字面量、`env:VAR`、CredentialProvider 引用（`<provider_id>:<key>`）；库本身不持久化任何凭证。
+`voice.yaml` 注册 provider、凭证引用、每个 provider 的时间预算与 adapter `options`（例如 Twilio 的 `webhook_url`、自定义转移路径），示例见 [examples/voice.yaml](examples/voice.yaml)。凭证支持字面量、`env:VAR`、CredentialProvider 引用（`<provider_id>:<key>`）；库本身不持久化任何凭证。
 
 请求处理约定：
 
@@ -58,11 +62,27 @@ assistant-request 与 tool-call 的响应走同一条 HTTP 连接。多个 tool 
 
 | Provider | 热路径 | 冷路径 |
 |----------|--------|--------|
-| Vapi（P0） | 是 | 部署、转移、挂断、查询 |
-| Retell（P1） | 是 | 查询 |
-| Bland（P1） | 是 | 查询 |
+| Vapi（P0） | assistant 请求、工具、生命周期 | 部署、转移、挂断、查询 |
+| Retell（P1） | assistant 请求、工具、生命周期 | 部署（LLM + agent）、转移、挂断、查询 |
+| Bland（P1） | assistant 请求、工具、生命周期 | 部署、转移、挂断、查询 |
+| Twilio（P2） | 状态回调 | 号码配置、转移、挂断、查询 |
+| ElevenLabs（P2） | server 工具、通话结束事件 | agent 部署、查询 |
 
-Twilio ConversationRelay 与 ElevenLabs 属 P2，未实现；LiveKit/Pipecat 仅观察。Retell/Bland 的 webhook 字段名依据公开文档实现，沙箱验收见 PRD V1。adapter 相互隔离，字段名修正只需改单个文件。
+Twilio ConversationRelay 的媒体与工具流量走 WebSocket，不属于同步 HTTP 连接器（PRD V4）；Twilio adapter 覆盖签名状态回调与 REST 呼叫控制。ElevenLabs 无公开 REST 实时转移/挂断接口，这两个方法显式抛 `NotImplementedError`。LiveKit/Pipecat 仅观察。
+
+Retell、Bland、Twilio、ElevenLabs 的字段名依据公开文档实现，沙箱验收见 PRD V1。adapter 相互隔离，字段名修正只需改单个文件。
+
+## 指标
+
+`VoiceMetrics` 按 provider 记录请求数、结果、耗时与验签结果。挂载可选的 Prometheus 文本端点：
+
+```python
+from fusion_voice.fastapi import build_metrics_router
+
+app.include_router(build_metrics_router(registry))   # GET /voice/metrics
+```
+
+暴露 `fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`。`registry.metrics.snapshot()` 返回同源字典，便于对接其他观测后端。多个 app 需要汇总时，把共享的 `VoiceMetrics()` 传给 `VoiceRegistry.from_config(..., metrics=...)`。
 
 ## 非目标
 

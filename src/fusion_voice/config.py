@@ -33,6 +33,7 @@ class ProviderConfig:
     adapter: str
     enabled: bool = True
     credentials: dict[str, str] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
     budgets: BudgetConfig = field(default_factory=BudgetConfig)
     inbound: InboundConfig = field(default_factory=InboundConfig)
 
@@ -51,7 +52,7 @@ class RootConfig:
 
 
 _ROOT_KEYS = {"providers", "unknown_event_policy", "logging"}
-_PROVIDER_KEYS = {"id", "adapter", "enabled", "credentials", "budgets", "inbound"}
+_PROVIDER_KEYS = {"id", "adapter", "enabled", "credentials", "options", "budgets", "inbound"}
 _BUDGET_KEYS = {"assistant_request_s", "tool_call_s"}
 _INBOUND_KEYS = {"max_body_bytes", "verify"}
 _LOGGING_KEYS = {"level", "raw_payload"}
@@ -137,11 +138,15 @@ def load_config(source: str | Path | dict[str, Any]) -> RootConfig:
         credentials = raw.get("credentials") or {}
         if not isinstance(credentials, dict):
             raise ConfigError(f"providers[{index}].credentials must be a mapping")
+        options = raw.get("options") or {}
+        if not isinstance(options, dict):
+            raise ConfigError(f"providers[{index}].options must be a mapping")
         providers[provider_id] = ProviderConfig(
             id=provider_id,
             adapter=adapter,
             enabled=bool(raw.get("enabled", True)),
             credentials={str(key): str(value) for key, value in credentials.items()},
+            options={str(key): value for key, value in options.items()},
             budgets=_parse_budgets(raw.get("budgets") or {}, index),
             inbound=_parse_inbound(raw.get("inbound") or {}, index),
         )

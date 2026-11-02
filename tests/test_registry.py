@@ -91,6 +91,23 @@ def test_missing_env_credential_rejected(monkeypatch):
         )
 
 
+def test_provider_options_reach_adapter():
+    registry = VoiceRegistry.from_config(
+        {
+            "providers": [
+                {
+                    "id": "twilio-main",
+                    "adapter": "twilio",
+                    "credentials": {"account_sid": "AC1", "auth_token": "tok"},
+                    "options": {"webhook_url": "https://example.com/voice/twilio-main"},
+                }
+            ]
+        }
+    )
+    adapter = registry.get_adapter("twilio-main")
+    assert adapter.webhook_url == "https://example.com/voice/twilio-main"
+
+
 def test_disabled_provider_not_adapted(secret):
     registry = VoiceRegistry.from_config(vapi_config(secret, enabled=False))
     assert registry.get_adapter("vapi-main") is None

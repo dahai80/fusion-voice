@@ -28,4 +28,4 @@ def assert_verify_implemented(adapter_cls: type[Any]) -> None:
         raise ConfigError(f"adapter {adapter_cls.__name__} must implement verify_request")
 
 
-from fusion_voice.adapters import bland, retell, vapi  # noqa: E402,F401
+from fusion_voice.adapters import bland, elevenlabs, retell, twilio, vapi  # noqa: E402,F401

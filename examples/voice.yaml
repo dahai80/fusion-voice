@@ -31,6 +31,27 @@ providers:
       assistant_request_s: 7.0
       tool_call_s: 5.0
 
+  - id: twilio-main
+    adapter: twilio
+    enabled: false
+    credentials:
+      account_sid: env:TWILIO_ACCOUNT_SID
+      auth_token: env:TWILIO_AUTH_TOKEN
+    options:
+      # Twilio signs URL + form params, so the public webhook URL is required.
+      webhook_url: https://your-app.example.com/voice/twilio-main
+      voice_url: https://your-app.example.com/twiml
+      status_callback: https://your-app.example.com/voice/twilio-main
+
+  - id: elevenlabs-main
+    adapter: elevenlabs
+    enabled: false
+    credentials:
+      webhook_secret: env:ELEVENLABS_WEBHOOK_SECRET
+      api_key: env:ELEVENLABS_API_KEY
+    options:
+      signature_tolerance_s: 300
+
 unknown_event_policy: record
 logging:
   level: INFO
