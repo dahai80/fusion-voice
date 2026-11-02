@@ -51,12 +51,15 @@ app.include_router(build_voice_router(registry))
 |------|--------|
 | 未知或已禁用 provider | 404 |
 | 请求体超过 `max_body_bytes`（默认 1 MiB） | 413 |
+| 客户端 IP 不在 `inbound.allowed_ips`（可选开启） | 403 |
 | 验签失败 | 401 |
 | 载荷格式错误 | 400 |
 | 助理处理超时 / 工具超时 | 助理 504；工具返回该工具的 error 结果 |
 | 处理器崩溃 | 500，响应体脱敏 |
 
-assistant-request 与 tool-call 的响应走同一条 HTTP 连接。多个 tool call 并发执行，每个受 provider `tool_call_s` 预算约束；超时或崩溃只影响对应工具的错误结果，不会拖垮整批。
+assistant-request 与 tool-call 的响应走同一条 HTTP 连接。多个 tool call 并发执行，每个受 provider `tool_call_s` 预算约束；超时或崩溃只影响对应工具的错误结果，不会拖垮整批。处理器可在 `ctx.headers` 读到原始请求头（已转小写），与 `ctx.call_id`、剩余预算一同传递。
+
+可选 IP 白名单按 provider 配置在 `inbound.allowed_ips`（CIDR 或单个地址）。仅在可信代理后开启 `inbound.trust_forwarded_for: true`，此时使用 `X-Forwarded-For` 的第一段。配置了非空白名单的 provider 会拒绝客户端 IP 缺失或不在任何网段内的请求。
 
 ## 支持的平台
 
@@ -79,10 +82,10 @@ Retell、Bland、Twilio、ElevenLabs 的字段名依据公开文档实现，沙�
 ```python
 from fusion_voice.fastapi import build_metrics_router
 
-app.include_router(build_metrics_router(registry))   # GET /voice/metrics
+app.include_router(build_metrics_router(registry))  # GET /voice/metrics
 ```
 
-暴露 `fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`。`registry.metrics.snapshot()` 返回同源字典，便于对接其他观测后端。多个 app 需要汇总时，把共享的 `VoiceMetrics()` 传给 `VoiceRegistry.from_config(..., metrics=...)`。
+暴露 `fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`，以及 `fusion_voice_normalization_duration_ms_count`/`_sum`（按事件类型统计 adapter 解析开销）。`registry.metrics.snapshot()` 返回同源字典，便于对接其他观测后端。多个 app 需要汇总时，把共享的 `VoiceMetrics()` 传给 `VoiceRegistry.from_config(..., metrics=...)`。
 
 ## 非目标
 

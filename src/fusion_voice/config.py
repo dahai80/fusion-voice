@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ class BudgetConfig:
 class InboundConfig:
     max_body_bytes: int = 1048576
     verify: str = "required"
+    allowed_ips: list[str] = field(default_factory=list)
+    trust_forwarded_for: bool = False
 
 
 @dataclass(slots=True)
@@ -54,7 +57,7 @@ class RootConfig:
 _ROOT_KEYS = {"providers", "unknown_event_policy", "logging"}
 _PROVIDER_KEYS = {"id", "adapter", "enabled", "credentials", "options", "budgets", "inbound"}
 _BUDGET_KEYS = {"assistant_request_s", "tool_call_s"}
-_INBOUND_KEYS = {"max_body_bytes", "verify"}
+_INBOUND_KEYS = {"max_body_bytes", "verify", "allowed_ips", "trust_forwarded_for"}
 _LOGGING_KEYS = {"level", "raw_payload"}
 _ID_PATTERN = re.compile(r"[a-z0-9_-]+")
 
@@ -90,7 +93,23 @@ def _parse_inbound(raw: Any, index: int) -> InboundConfig:
         raise ConfigError(f"providers[{index}].inbound.verify must be required|disabled")
     if verify == "disabled":
         logger.warning("inbound verification disabled provider_index=%d", index)
-    return InboundConfig(max_body_bytes=max_body, verify=verify)
+
+    raw_allowed = raw.get("allowed_ips") or []
+    if not isinstance(raw_allowed, list):
+        raise ConfigError(f"providers[{index}].inbound.allowed_ips must be a list")
+    allowed_ips = []
+    for item in raw_allowed:
+        try:
+            allowed_ips.append(str(ipaddress.ip_network(str(item), strict=False)))
+        except ValueError as exc:
+            raise ConfigError(f"providers[{index}].inbound.allowed_ips invalid entry {item!r}: {exc}") from exc
+    trust_forwarded_for = bool(raw.get("trust_forwarded_for", False))
+    return InboundConfig(
+        max_body_bytes=max_body,
+        verify=verify,
+        allowed_ips=allowed_ips,
+        trust_forwarded_for=trust_forwarded_for,
+    )
 
 
 def _parse_logging(raw: Any) -> LoggingConfig:

@@ -17,7 +17,8 @@ def build_voice_router(registry: VoiceRegistry, prefix: str = "/voice") -> APIRo
     async def handle_webhook(provider_id: str, request: Request) -> JSONResponse:
         body = await request.body()
         headers = {key.lower(): value for key, value in request.headers.items()}
-        result = await registry.dispatch(provider_id, headers, body)
+        client_ip = request.client.host if request.client else None
+        result = await registry.dispatch(provider_id, headers, body, client_ip)
         logger.debug("webhook handled provider=%s status=%d", provider_id, result.status)
         return JSONResponse(status_code=result.status, content=result.body)
 

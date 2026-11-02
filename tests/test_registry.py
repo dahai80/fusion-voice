@@ -158,6 +158,7 @@ async def test_assistant_request_success(vapi_registry, secret):
     async def handler(ctx):
         assert ctx.call_id == "call_1"
         assert ctx.deadline_seconds == 7.0
+        assert ctx.headers["x-vapi-signature"] == _signed(secret, _assistant_body())["x-vapi-signature"]
         return AssistantResponse(assistant_id="asst_1")
 
     body = _assistant_body()
@@ -260,6 +261,37 @@ async def test_event_sink_failure_isolated(vapi_registry, secret):
     response = await vapi_registry.dispatch("vapi-main", _signed(secret, body), body)
     assert response.status == 200
     assert seen == [VoiceEventType.STATUS_UPDATE]
+
+
+async def test_ip_allowlist_blocks_unknown_client(secret):
+    registry = VoiceRegistry.from_config(vapi_config(secret, inbound={"allowed_ips": ["10.0.0.0/8"]}))
+    body = payload({"message": {"type": "status-update", "call": {"id": "c"}}})
+    response = await registry.dispatch("vapi-main", _signed(secret, body), body, client_ip="192.168.1.1")
+    assert response.status == 403
+
+
+async def test_ip_allowlist_allows_network(secret):
+    registry = VoiceRegistry.from_config(vapi_config(secret, inbound={"allowed_ips": ["10.0.0.0/8"]}))
+    body = payload({"message": {"type": "status-update", "call": {"id": "c"}}})
+    response = await registry.dispatch("vapi-main", _signed(secret, body), body, client_ip="10.1.2.3")
+    assert response.status == 200
+
+
+async def test_ip_allowlist_denies_missing_client_ip(secret):
+    registry = VoiceRegistry.from_config(vapi_config(secret, inbound={"allowed_ips": ["10.0.0.0/8"]}))
+    body = payload({"message": {"type": "status-update", "call": {"id": "c"}}})
+    response = await registry.dispatch("vapi-main", _signed(secret, body), body)
+    assert response.status == 403
+
+
+async def test_ip_allowlist_trusts_forwarded_for(secret):
+    registry = VoiceRegistry.from_config(
+        vapi_config(secret, inbound={"allowed_ips": ["10.0.0.0/8"], "trust_forwarded_for": True})
+    )
+    body = payload({"message": {"type": "status-update", "call": {"id": "c"}}})
+    headers = {**_signed(secret, body), "x-forwarded-for": "10.1.2.3, 203.0.113.9"}
+    response = await registry.dispatch("vapi-main", headers, body, client_ip="127.0.0.1")
+    assert response.status == 200
 
 
 async def test_unknown_event_recorded(secret):

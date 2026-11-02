@@ -215,6 +215,12 @@ async def test_deploy_assistant_patches_existing():
     assert calls[0].url.path == "/assistant/asst_old"
 
 
+async def test_deploy_assistant_requires_returned_id():
+    adapter = _adapter(http_transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+    with pytest.raises(RuntimeError, match="no assistant id"):
+        await adapter.deploy_assistant(AssistantSpec(name="booking"))
+
+
 async def test_transfer_call():
     calls: list[httpx.Request] = []
     adapter = _adapter(http_transport=_transport(calls, httpx.Response(200, json={})))

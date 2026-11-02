@@ -157,6 +157,8 @@ class ElevenLabsAdapter(HttpAdapterMixin):
             response = self._request("POST", "/v1/convai/agents/create", self._agent_payload(spec))
         data = response.json()
         resolved = str(data.get("agent_id") or data.get("id") or agent_id or "")
+        if not resolved:
+            raise RuntimeError("elevenlabs deploy_assistant returned no agent id")
         logger.info("elevenlabs agent deployed id=%s", resolved)
         return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 

@@ -51,12 +51,15 @@ Request handling contract:
 |-----------|--------|
 | Unknown or disabled provider | 404 |
 | Body over `max_body_bytes` (default 1 MiB) | 413 |
+| Client IP outside `inbound.allowed_ips` (opt-in) | 403 |
 | Signature verification failed | 401 |
 | Malformed payload | 400 |
 | Assistant handler timeout or tool timeout | 504 for assistant; per-tool error result for tools |
 | Handler crash | 500 with redacted body |
 
-Assistant-request and tool-call responses are returned on the same HTTP connection. Tool calls run concurrently, each bounded by the provider's `tool_call_s` budget; a timeout or crash becomes that tool's `error` result and does not fail the batch.
+Assistant-request and tool-call responses are returned on the same HTTP connection. Tool calls run concurrently, each bounded by the provider's `tool_call_s` budget; a timeout or crash becomes that tool's `error` result and does not fail the batch. Handlers receive the raw request headers (lowercased) in `ctx.headers` alongside `ctx.call_id` and the remaining budget.
+
+Optional IP allowlisting is configured per provider under `inbound.allowed_ips` (CIDR or plain address). Set `inbound.trust_forwarded_for: true` only behind a trusted proxy; the first `X-Forwarded-For` entry is then used. A provider with a non-empty allowlist rejects requests whose client IP is missing or outside every network.
 
 ## Supported platforms
 
@@ -79,10 +82,10 @@ Retell, Bland, Twilio, and ElevenLabs field names follow public documentation; s
 ```python
 from fusion_voice.fastapi import build_metrics_router
 
-app.include_router(build_metrics_router(registry))   # GET /voice/metrics
+app.include_router(build_metrics_router(registry))  # GET /voice/metrics
 ```
 
-Exposed series: `fusion_voice_requests_total`, `fusion_voice_request_duration_ms_sum`, `fusion_voice_verification_total`. `registry.metrics.snapshot()` returns the same data as a dict for direct integration with another observability backend. Pass a shared `VoiceMetrics()` to `VoiceRegistry.from_config(..., metrics=...)` when multiple apps should report into one collector.
+Exposed series: `fusion_voice_requests_total`, `fusion_voice_request_duration_ms_sum`, `fusion_voice_verification_total`, and `fusion_voice_normalization_duration_ms_count`/`_sum` (adapter parse overhead per event type). `registry.metrics.snapshot()` returns the same data as a dict for direct integration with another observability backend. Pass a shared `VoiceMetrics()` to `VoiceRegistry.from_config(..., metrics=...)` when multiple apps should report into one collector.
 
 ## Non-goals
 
