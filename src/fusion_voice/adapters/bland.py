@@ -144,6 +144,8 @@ class BlandAdapter(HttpAdapterMixin):
             response = self._request("POST", deploy_path, payload)
         data = response.json()
         resolved = str(data.get("assistant_id") or data.get("agent_id") or data.get("id") or assistant_id or "")
+        if not resolved:
+            raise RuntimeError("bland deploy_assistant returned no assistant id")
         logger.info("bland assistant deployed id=%s", resolved)
         return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 

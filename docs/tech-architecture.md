@@ -226,6 +226,8 @@ providers:
     inbound:
       max_body_bytes: 1048576     # 1 MiB，超限 413（PRD §8.2）
       verify: required            # required | disabled（仅测试，启动告警）
+      allowed_ips: []             # 可选 CIDR / 单地址白名单；空 = 不限制
+      trust_forwarded_for: false  # 仅可信代理后开启，取 X-Forwarded-For 首段
 
 unknown_event_policy: record      # record（交消费者）| drop（仅计数）
 logging:
@@ -245,6 +247,8 @@ logging:
 | `budgets.tool_call_s` | `5.0` | `0 < v ≤ 10`（PRD V2） |
 | `inbound.max_body_bytes` | `1048576` | ≥ 1024 |
 | `inbound.verify` | `required` | `disabled` 时启动写 WARN 日志 |
+| `inbound.allowed_ips` | `[]` | 每项必须是合法 IP/CIDR，规范化为网络串 |
+| `inbound.trust_forwarded_for` | `false` | 布尔；仅在可信代理后开启 |
 | `unknown_event_policy` | `record` | 枚举 |
 | 未知字段 | — | 报错（防拼写漂移静默失效） |
 
@@ -282,7 +286,7 @@ logging:
 |----|------|
 | 签名 | HMAC-SHA256（`hmac.new(secret, raw_body, sha256).hexdigest()`），头 `x-vapi-signature`（大小写不敏感读取），`hmac.compare_digest` 恒时比较 |
 | 密钥 | 构造期注入 `webhook_secret`；来源为消费者注入的 `CredentialProvider`（§9.3） |
-| IP 白名单 | **不在库内**：部署层（反向代理）做，属防御纵深，不是 SPI 职责 |
+| IP 白名单 | 库内可选：`inbound.allowed_ips`（CIDR），`trust_forwarded_for` 在可信代理后取 XFF 首段；默认关闭 |
 | 事件映射 | §5.3 表；`toolCallList` / `toolCalls` 双键兼容 |
 | 应答格式 | assistant：`{"assistantId": "..."}`；tool：`{"results": [{"toolCallId", "result"\|"error"}]}` |
 | 解析失败 | `VoiceEvent(ERROR, payload={"detail": ...})`；router 转 400（§10） |
@@ -387,6 +391,7 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
 | 验证强制在 SPI 层 | `adapters/__init__.py` 注册期检查 + `registry.from_config` 复查 | 单测：未实现 verify 的 adapter 注册即 `ConfigError` |
 | Fail-closed | `dispatch` 的异常边界（§8 伪代码） | 安全测试：畸形输入永不 5xx |
 | 请求体上限 1 MiB | `config.inbound.max_body_bytes`，`dispatch` 首步检查 | 单测：1 MiB+1 → 413 |
+| 可选来源 IP 白名单 | `config.inbound.allowed_ips`，验签前检查 | 单测：网段外 403、可信 XFF 放行 |
 | 凭据不进库 | `credentials.py` 薄封装；库不落盘、不取密 | 审计：库代码无文件写/网络取密路径 |
 | 错误脱敏 | handler 异常只回通用文本；细节仅服务端日志 | 单测：异常信息不出现在应答体 |
 | 热路径零日志阻塞 | `hooks` 仅入内存队列；无 hook 时丢弃 | 基准测试 p99 不随日志量增长 |
@@ -397,6 +402,7 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
 |------|--------|--------|------|
 | 未知 / 禁用 provider | 404 | `{"error": "not found"}` | 计数指标 |
 | body 超限 | 413 | `{"error": "body too large"}` | 计数指标 |
+| 来源 IP 不在白名单 | 403 | `{"error": "forbidden"}` | `ip_blocked` 计数 |
 | 签名缺失 / 无效 | 401 | `{"error": "unauthorized"}` | `on_error("verification")`，含来源 IP |
 | 已签名但 JSON 不可解析 / 非对象 | 400 | `{"error": "bad payload"}` | `on_event(ERROR)` 携 `raw` |
 | 已签名、可解析、未知事件类型 | 200 | `{}` | `UNKNOWN` 事件交消费者（或不交，按 `unknown_event_policy`） |
@@ -550,4 +556,4 @@ Retell/Bland/Twilio/ElevenLabs 的字段名与端点依据公开文档实现，�
 - `VoiceMetrics`（`metrics.py`）：线程安全计数器，维度为 `(provider_id, event_type, outcome)` 的请求数与累计耗时，以及 `(provider_id, ok|fail)` 验签结果。热路径仅做内存自增，无 I/O。
 - 记账点位于 dispatch：413/401/400/504/500 与正常 200 均记 outcome；验签成功与失败分别记账；`UNKNOWN` 被 drop 时记 `ignored`。
 - 输出：`registry.metrics.snapshot()` 返回字典，`render_prometheus()` 生成 Prometheus 文本；`build_metrics_router(registry)` 暴露 `GET /voice/metrics`。
-- 指标序列：`fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`。不引入 Prometheus 客户端依赖，由 Fusion 可观测性侧抓取。
+- 指标序列：`fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`、`fusion_voice_normalization_duration_ms_count`/`_sum`（按 provider + event_type 统计 adapter 解析耗时）。不引入 Prometheus 客户端依赖，由 Fusion 可观测性侧抓取。

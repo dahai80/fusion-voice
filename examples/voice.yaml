@@ -11,6 +11,8 @@ providers:
     inbound:
       max_body_bytes: 1048576
       verify: required
+      allowed_ips: []
+      trust_forwarded_for: false
 
   - id: retell-main
     adapter: retell

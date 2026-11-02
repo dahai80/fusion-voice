@@ -105,6 +105,18 @@ def test_options_must_be_mapping():
         load_config({"providers": [{"id": "a", "adapter": "twilio", "options": ["x"]}]})
 
 
+def test_allowed_ips_normalized_to_networks():
+    config = load_config(
+        {"providers": [{"id": "a", "adapter": "vapi", "inbound": {"allowed_ips": ["10.0.0.1", "192.168.0.0/16"]}}]}
+    )
+    assert config.providers["a"].inbound.allowed_ips == ["10.0.0.1/32", "192.168.0.0/16"]
+
+
+def test_invalid_allowed_ip_rejected():
+    with pytest.raises(ConfigError, match="allowed_ips"):
+        load_config({"providers": [{"id": "a", "adapter": "vapi", "inbound": {"allowed_ips": ["not-an-ip"]}}]})
+
+
 def test_verify_disabled_warns(caplog):
     config = load_config({"providers": [{"id": "a", "adapter": "vapi", "inbound": {"verify": "disabled"}}]})
     assert config.providers["a"].inbound.verify == "disabled"

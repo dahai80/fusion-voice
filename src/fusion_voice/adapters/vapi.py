@@ -153,6 +153,8 @@ class VapiAdapter(HttpAdapterMixin):
             response = self._request("POST", "/assistant", self._assistant_payload(spec))
         data = response.json()
         resolved = str(data.get("id") or assistant_id or "")
+        if not resolved:
+            raise RuntimeError("vapi deploy_assistant returned no assistant id")
         logger.info("vapi assistant deployed id=%s", resolved)
         return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 

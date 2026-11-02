@@ -69,6 +69,13 @@ def test_oversized_body_413(secret):
     assert response.status_code == 413
 
 
+def test_ip_allowlist_blocks_test_client(secret):
+    registry = VoiceRegistry.from_config(vapi_config(SECRET, inbound={"allowed_ips": ["127.0.0.1"]}))
+    client = _client(registry)
+    response = client.post("/voice/vapi-main", content=BODY, headers={"x-vapi-signature": sign(SECRET, BODY)})
+    assert response.status_code == 403
+
+
 def test_metrics_endpoint(secret):
     registry = VoiceRegistry.from_config(vapi_config(SECRET))
 

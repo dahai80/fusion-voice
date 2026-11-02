@@ -114,8 +114,14 @@ class VoiceRegistry:
             except Exception:
                 logger.exception("event sink failed provider=%s", provider_id)
 
-    async def dispatch(self, provider_id: str, headers: dict[str, str], body: bytes) -> WebhookResponse:
-        return await dispatch_webhook(self, provider_id, headers, body)
+    async def dispatch(
+        self,
+        provider_id: str,
+        headers: dict[str, str],
+        body: bytes,
+        client_ip: str | None = None,
+    ) -> WebhookResponse:
+        return await dispatch_webhook(self, provider_id, headers, body, client_ip)
 
     def budget_for(self, provider_id: str, event_type: str) -> float | None:
         return budget_for(self._config.providers[provider_id], event_type)

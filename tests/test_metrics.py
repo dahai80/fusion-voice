@@ -24,6 +24,18 @@ def test_record_and_snapshot():
     ]
 
 
+def test_normalization_recorded_in_snapshot_and_prometheus():
+    metrics = VoiceMetrics()
+    metrics.record_normalization("vapi", "TOOL_CALL", 0.4)
+    metrics.record_normalization("vapi", "TOOL_CALL", 0.6)
+    assert metrics.snapshot()["normalization"] == [
+        {"provider_id": "vapi", "event_type": "TOOL_CALL", "count": 2, "total_ms": 1.0}
+    ]
+    text = metrics.render_prometheus()
+    assert 'fusion_voice_normalization_duration_ms_count{event_type="TOOL_CALL",provider_id="vapi"} 2' in text
+    assert 'fusion_voice_normalization_duration_ms_sum{event_type="TOOL_CALL",provider_id="vapi"} 1.0' in text
+
+
 def test_prometheus_render():
     metrics = VoiceMetrics()
     metrics.record_request("vapi", "ASSISTANT_REQUEST", "ok", 12.5)

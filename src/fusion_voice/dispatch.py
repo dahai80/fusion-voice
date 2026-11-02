@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from dataclasses import dataclass, field
@@ -19,13 +20,25 @@ class WebhookResponse:
     body: dict[str, Any] = field(default_factory=dict)
 
 
-async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], body: bytes) -> WebhookResponse:
+async def dispatch(
+    registry: Any,
+    provider_id: str,
+    headers: dict[str, str],
+    body: bytes,
+    client_ip: str | None = None,
+) -> WebhookResponse:
     started = time.monotonic()
+    headers = {str(key).lower(): value for key, value in headers.items()}
     adapter = registry.get_adapter(provider_id)
     if adapter is None:
         return WebhookResponse(404, {"error": "not found"})
 
     provider = registry.provider_config(provider_id)
+    if not _ip_allowed(provider.inbound, headers, client_ip):
+        registry.hooks.on_error(provider_id, "ip_blocked")
+        _record(registry, provider_id, VoiceEventType.UNKNOWN, "ip_blocked", started)
+        return WebhookResponse(403, {"error": "forbidden"})
+
     if len(body) > provider.inbound.max_body_bytes:
         registry.hooks.on_error(provider_id, "body_too_large")
         _record(registry, provider_id, VoiceEventType.UNKNOWN, "body_too_large", started)
@@ -41,13 +54,17 @@ async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], bod
             return WebhookResponse(401, {"error": "unauthorized"})
         registry.metrics.record_verification(provider_id, True)
 
+    parse_started = time.monotonic()
     try:
         event = adapter.parse_event(body)
     except Exception:
         logger.exception("adapter parse failed provider=%s", provider_id)
         registry.hooks.on_error(provider_id, "parse_exception")
+        registry.metrics.record_normalization(provider_id, VoiceEventType.ERROR, _ms(parse_started))
         _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
         return WebhookResponse(400, {"error": "bad payload"})
+    normalized_type = VoiceEventType.ERROR if event.type == VoiceEventType.ERROR else event.type
+    registry.metrics.record_normalization(provider_id, normalized_type, _ms(parse_started))
     if event.type == VoiceEventType.ERROR:
         registry.hooks.on_event(provider_id, event, "parse_error", _ms(started))
         _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
@@ -56,6 +73,7 @@ async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], bod
     ctx = VoiceSessionContext(
         call_id=event.call_id or "",
         deadline_seconds=budget_for(provider, event.type),
+        headers=headers,
     )
 
     if event.type == VoiceEventType.TOOL_CALL:
@@ -128,3 +146,22 @@ def _ms(started: float) -> float:
 
 def _record(registry: Any, provider_id: str, event_type: str, outcome: str, started: float) -> None:
     registry.metrics.record_request(provider_id, event_type, outcome, _ms(started))
+
+
+def _ip_allowed(inbound: Any, headers: dict[str, str], client_ip: str | None) -> bool:
+    if not inbound.allowed_ips:
+        return True
+    candidate = client_ip
+    if inbound.trust_forwarded_for:
+        forwarded = headers.get("x-forwarded-for", "")
+        if forwarded:
+            candidate = forwarded.split(",")[0].strip()
+    if not candidate:
+        return False
+    try:
+        address = ipaddress.ip_address(candidate)
+        networks = [ipaddress.ip_network(item, strict=False) for item in inbound.allowed_ips]
+    except ValueError:
+        logger.warning("invalid client ip blocked ip=%s", candidate)
+        return False
+    return any(address in network for network in networks)

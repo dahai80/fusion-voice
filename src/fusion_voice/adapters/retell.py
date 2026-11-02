@@ -166,6 +166,8 @@ class RetellAdapter(HttpAdapterMixin):
             response = self._request("POST", "/create-agent", agent_payload)
         data = response.json()
         resolved = str(data.get("agent_id") or data.get("id") or assistant_id or "")
+        if not resolved:
+            raise RuntimeError("retell deploy_assistant returned no agent id")
         logger.info("retell assistant deployed id=%s", resolved)
         return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 
