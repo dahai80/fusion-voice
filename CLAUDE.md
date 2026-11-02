@@ -6,20 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `fusion-voice` is the Fusion ecosystem's planned **voice-agent platform access layer**: a connector library that normalizes hosted voice AI platforms (Vapi, Retell, Bland, ElevenLabs, Twilio ConversationRelay) behind one SPI and one event model. Sister library of `fusion-channel` (messaging access layer) — same problem shape, but the **synchronous** variant: assistant-request (≤7.5s platform limit) and tool-call (default 5s budget) responses go back on the same HTTP connection, which is why the two libraries cannot merge.
 
-**Current state: pre-implementation (PRD M0).** This directory is intentionally empty — no code, no pyproject, no git. Per PRD §10, the SPI and the vapi adapter incubate inside the first consumer repo at `business/ai-booking-agent/backend/booking_agent/voice/` (`spi.py` + `vapi_adapter.py`, interface verbatim per PRD §4). Extraction into this repo is milestone M1, triggered by a second real consumer or a second adapter. Do not start building here ahead of that trigger, and do not modify ai-booking-agent from this repo.
+**Current state: M1 implemented (2026-11-02).** All hot-path and cold-path features described below exist under `src/fusion_voice/`: SPI and event model (`spi.py`, `models.py`), config validation (`config.py`), credential resolution (`credentials.py`), budgets (`budgets.py`), async structured logging (`hooks.py`), dispatch/status matrix (`dispatch.py`), registry (`registry.py`), FastAPI router (`fastapi.py`), and three adapters (`adapters/vapi.py`, `retell.py`, `bland.py`). Tests live in `tests/`, example config in `examples/voice.yaml`.
+
+The PRD M0 incubation remains the behavioral baseline for Vapi: `business/ai-booking-agent/backend/booking_agent/voice/` (`spi.py` + `vapi_adapter.py`, interface verbatim per PRD §4). Extraction acceptance (PRD §9) is the consumer's `/vapi/webhook` integration suite staying green; switching the consumer over is that repo's change, not this one. Retell/Bland hot paths follow public docs and still await sandbox validation (PRD V1). Retell/Bland deploy/transfer/hang-up intentionally raise `NotImplementedError` until M2.
 
 Authoritative spec: `/Users/dahai/fusion/architecture/fusion-voice-prd.md` (v0.1). Implementation-level design: `docs/tech-architecture.md` (module layout, hot-path dispatch and timeout control, status-code matrix, config schema, M0→M1 extraction plan). When SPI signatures, the event model, adapter roadmap, or open-question conclusions change, the PRD and tech-architecture doc must be updated in the same change (PRD §12 maintenance rule).
 
 ## Commands
 
-None yet — no code exists here. When M1 extraction happens, bootstrap as an in-tree Python library following the `fusion-channel` template (the closest sibling):
-
 ```bash
 cd /Users/dahai/fusion && source .venv/bin/activate   # REQUIRED before any Python work
 
 cd fusion-voice
-pip install -e ".[test]"          # setuptools, packages.find where=["src"]
-pytest tests/                     # asyncio_mode=auto
+pip install -e ".[test,api]"      # setuptools, packages.find where=["src"]
+pytest tests/                     # asyncio_mode=auto; 153 cases
+FUSION_VOICE_BENCH=1 pytest tests/test_perf.py -q   # p95 overhead budgets
 ruff check . && ruff format .     # E/F/W/I/UP/B/SIM, line-length 120
 ```
 
@@ -35,7 +36,7 @@ Migration acceptance gate (PRD §9): ai-booking-agent's existing `/vapi/webhook`
 - **Adapters** (PRD §6): `vapi` P0 (HMAC header + IP allowlist), `retell`/`bland` P1, `twilio`/`elevenlabs` P2 (Twilio HMAC-SHA1 verify can be ported from fusion-channel). Open-source voice runtimes (LiveKit/Pipecat) are watchlist only.
 - **`AssistantSpec` / `ToolSpec`** — config-as-code assistant definitions deployed via REST; the same ToolSpec translates to each platform's function format. M1 covers only the cross-platform intersection (model/voice/transcriber/prompt/tools); platform-specific capabilities go through an escape hatch (PRD V3).
 
-## Hard rules (PRD §8, enforced by tests when built)
+## Hard rules (PRD §8, enforced by tests)
 
 - Adapter without `verify_request` cannot register — `ConfigError` at registration.
 - Fail-closed: verify/parse errors return 4xx, never 500 on attacker input; body over limit (default 1 MiB) → 413.
@@ -53,9 +54,11 @@ No audio runtime (STT/TTS/VAD/barge-in belong to the platform or to `fusion-spee
 ## Conventions
 
 - In-tree Python library, `pip install -e fusion-voice`, same distribution mode as fusion-core/fusion-channel. No resident service.
-- Independent git repo (like every fusion-* sub-project; this one not yet initialized). README.md English only; README_CN.md Chinese.
+- Independent git repo. README.md English only; README_CN.md Chinese.
 - 4-space indentation, no docstrings (comments only), logging on every module.
 - The incubating SPI/adapter in ai-booking-agent is that repo's work; behavior changes there follow its own PRD/review flow. This repo only receives the M1 extraction.
+- Hot-path parsing catches `ValueError`/`RecursionError` (not only `JSONDecodeError`) and dispatch wraps `parse_event` — malformed or deeply nested attacker input must return 400, never 500.
+- `VoiceRegistry.from_config` skips disabled providers entirely, so their `env:` credential refs are not resolved at startup.
 
 ## Ports
 
