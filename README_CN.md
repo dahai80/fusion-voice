@@ -93,6 +93,7 @@ app.include_router(build_metrics_router(registry))  # GET /voice/metrics
 
 ## 文档
 
+- [变更日志](CHANGELOG.md) — 版本历史。
 - [技术架构](docs/tech-architecture.md) — 模块划分、热路径分发与超时控制、状态码矩阵、配置 schema、测试策略。
 - [架构方案](../../architecture/fusion-voice-archi-plan-1102.md) — M0–M3 里程碑与生态边界。
 - [PRD v0.1](../../architecture/fusion-voice-prd.md) — 需求、安全红线、性能预算。
