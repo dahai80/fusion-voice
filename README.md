@@ -93,6 +93,7 @@ No audio runtime (STT/TTS/VAD/barge-in), no LLM orchestration, no number purchas
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md) — release history.
 - [Technical architecture](docs/tech-architecture.md) — module layout, hot-path dispatch and timeout control, status-code matrix, config schema, testing strategy.
 - [Architecture plan](../../architecture/fusion-voice-archi-plan-1102.md) — milestones M0–M3 and ecosystem boundaries.
 - [PRD v0.1](../../architecture/fusion-voice-prd.md) — requirements, security red lines, performance budgets.
