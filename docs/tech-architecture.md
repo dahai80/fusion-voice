@@ -8,7 +8,7 @@
 
 ### 1.1 阶段状态
 
-- **2026-11-02 实施完成**：本仓库已按本文落地 M1 库形态（SPI、事件模型、registry/dispatch、vapi/retell/bland 三个热路径 adapter、FastAPI 路由、测试与示例配置）。vapi 行为以孵化代码为基准；retell/bland 的签名字段与事件名按公开文档实现，沙箱验收仍待 PRD V1 结论。
+- **2026-11-02 实施完成**：本仓库已按本文落地 M1–M3 库形态（SPI、事件模型、registry/dispatch、vapi/retell/bland/twilio/elevenlabs 五个 adapter、FastAPI 路由与指标端点、测试与示例配置）。vapi 行为以孵化代码为基准；retell/bland/twilio/elevenlabs 的签名字段与事件名按公开文档实现，沙箱验收仍待 PRD V1 结论。
 - **孵化期事实**：SPI 与 vapi adapter 的原始代码在 `business/ai-booking-agent/backend/booking_agent/voice/`（`spi.py` + `vapi_adapter.py`），抽取验收标准是消费者 `/vapi/webhook` 集成测试全绿（PRD §9），业务侧切换属于消费者仓库的改动。
 - **抽库触发条件不变**：「第二个真实消费者」或「第二个 adapter 落地」（PRD §6/§10）。本仓库先完成实现，触发后执行 §13 的逐字迁移核对。
 - 本文与 PRD 的维护联动：SPI 签名、事件模型、适配器路线变化时，PRD 与本文同一次改动更新。
@@ -79,7 +79,7 @@ fusion-voice/
 ├── docs/tech-architecture.md   # 本文
 ├── examples/voice.yaml         # 示例配置（data-driven 注册）
 ├── src/fusion_voice/
-│   ├── __init__.py             # 公共 API 导出（VoiceRegistry/build_voice_router/VoiceEvent…）
+│   ├── __init__.py             # 核心公共 API（VoiceRegistry/VoiceEvent/模型类型）
 │   ├── spi.py                  # VoiceProvider Protocol + VerificationError
 │   ├── models.py               # 热路径 + 冷路径数据模型
 │   ├── registry.py             # VoiceRegistry 门面：from_config / handler 注册 / dispatch
@@ -111,7 +111,7 @@ fusion-voice/
 | `config.py` | YAML 解析、dataclass 校验、`env:VAR` 与 `provider:key` 引用解析 | 未知字段报 `ConfigError`（防拼写漂移）；`inbound.verify` 仅测试可 `disabled` |
 | `dispatch.py` | `verify → parse → budget → handler → format` 单次编排；异常转状态码 | 纯函数式，不持有全局状态；每次调用只做一次 body 解析 |
 | `fastapi.py` | `build_voice_router(registry, prefix="/voice")`；读取 raw body（`await request.body()`），headers 转小写 dict | 不自动解析 JSON（adapter 需要原始字节做签名） |
-| `hooks.py` | 事件/错误的结构化日志与原始 payload 出口；默认实现为异步队列 sink | 热路径只入内存队列，绝不阻塞；无 hook 时丢弃原始 payload |
+| `hooks.py` | 事件/错误/原始 payload 出口；默认 `VoiceHooks` 为 no-op，`StructuredLogHooks` 为可选异步队列 sink | 热路径只入内存队列，绝不阻塞；未显式装配 sink 时不产生日志 |
 | `credentials.py` | 复用 `fusion_channel.credentials` 的 Provider 实现（§14） | 读值掩码；库自身不写密钥文件 |
 | `adapters/` | 一平台一文件；`@register` 进 `ADAPTERS`；`_base` 提供出站 HTTP 注入 | 新增平台不改 registry/dispatch（开闭原则） |
 | `budgets.py` | 由 provider 配置与事件类型计算 `deadline_seconds`；`remaining(ctx)` 供 handler 自查 | 预算只透传，不在此处强制等待 |
@@ -209,6 +209,21 @@ dispatch(provider_id, headers, body)
 - 平台字段名不得越过 adapter：消费者代码只见 §5.2 的键。
 - `raw` 的 PII 策略由消费者承担（PRD §8.4）；库在 `hooks.on_raw_payload` 之外不持久化 `raw`。
 
+### 5.4 平台事件覆盖矩阵
+
+| VoiceEventType | vapi | retell | bland | twilio | elevenlabs |
+|----------------|------|--------|-------|--------|------------|
+| `ASSISTANT_REQUEST` | ✓ | ✓ | — | — | — |
+| `TOOL_CALL` | ✓ | ✓ | ✓ | — | ✓ |
+| `CALL_STARTED` | — | ✓ | ✓ | ✓ | ✓ |
+| `CALL_ENDED` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `STATUS_UPDATE` | ✓ | — | — | ✓ | — |
+| `TRANSFER_REQUESTED` | ✓ | — | ✓ | — | — |
+| `HANGUP_REQUESTED` | — | — | ✓ | — | — |
+| `UNKNOWN`（含 `raw`） | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+覆盖差异来自平台 webhook 契约，不是实现缺口：Vapi 的 webhook 没有独立“呼叫开始”消息，开始状态经 `status-update`（`STATUS_UPDATE`）到达，消费者由状态迁移推导；Vapi 的挂断经 `end-of-call-report`（`CALL_ENDED`）或 `TRANSFER_REQUESTED` 表达。Twilio 状态回调的 `Timestamp` 若存在，分别映射到 `started_at` / `ended_at`；字段缺失时为 `None`。新增或修正映射须同步本表。
+
 ## 6. 配置设计（voice.yaml）
 
 ```yaml
@@ -227,7 +242,7 @@ providers:
       max_body_bytes: 1048576     # 1 MiB，超限 413（PRD §8.2）
       verify: required            # required | disabled（仅测试，启动告警）
       allowed_ips: []             # 可选 CIDR / 单地址白名单；空 = 不限制
-      trust_forwarded_for: false  # 仅可信代理后开启，取 X-Forwarded-For 首段
+      trust_forwarded_for: false  # 仅可信代理后开启，取 X-Forwarded-For 末段
 
 unknown_event_policy: record      # record（交消费者）| drop（仅计数）
 logging:
@@ -286,7 +301,7 @@ logging:
 |----|------|
 | 签名 | HMAC-SHA256（`hmac.new(secret, raw_body, sha256).hexdigest()`），头 `x-vapi-signature`（大小写不敏感读取），`hmac.compare_digest` 恒时比较 |
 | 密钥 | 构造期注入 `webhook_secret`；来源为消费者注入的 `CredentialProvider`（§9.3） |
-| IP 白名单 | 库内可选：`inbound.allowed_ips`（CIDR），`trust_forwarded_for` 在可信代理后取 XFF 首段；默认关闭 |
+| IP 白名单 | 库内可选：`inbound.allowed_ips`（CIDR），`trust_forwarded_for` 在可信代理后取 XFF 末段，避免客户端伪造左侧条目；要求代理覆写或追加真实地址，且服务端口不直接暴露；默认关闭 |
 | 事件映射 | §5.3 表；`toolCallList` / `toolCalls` 双键兼容 |
 | 应答格式 | assistant：`{"assistantId": "..."}`；tool：`{"results": [{"toolCallId", "result"\|"error"}]}` |
 | 解析失败 | `VoiceEvent(ERROR, payload={"detail": ...})`；router 转 400（§10） |
@@ -305,7 +320,7 @@ async def dispatch(provider_id: str, headers: dict[str, str], body: bytes) -> We
         return WebhookResponse(413, {"error": "body too large"})
     try:
         adapter.verify_request(headers, body)  # → 401
-    except VerificationError:
+    except Exception:  # VerificationError 及任何意外异常都 fail-closed
         self._hooks.on_error(provider_id, "verification")
         return WebhookResponse(401, {"error": "unauthorized"})
 
@@ -314,7 +329,8 @@ async def dispatch(provider_id: str, headers: dict[str, str], body: bytes) -> We
         self._hooks.on_event(provider_id, event, outcome="parse_error")
         return WebhookResponse(400, {"error": "bad payload"})
 
-    ctx = VoiceSessionContext(call_id=event.call_id or "", deadline_seconds=self._budget(event))
+    # received_at 取入口时刻，预算扣除验签/解析已用时间
+    ctx = VoiceSessionContext(call_id=event.call_id or "", received_at=started, deadline_seconds=self._budget(event))
 
     if event.type == VoiceEventType.TOOL_CALL:
         results = await asyncio.gather(*(self._run_tool(ctx, call) for call in event.tool_calls))
@@ -323,7 +339,7 @@ async def dispatch(provider_id: str, headers: dict[str, str], body: bytes) -> We
 
     if event.type == VoiceEventType.ASSISTANT_REQUEST:
         try:
-            resp = await asyncio.wait_for(self._assistant_handler(ctx), timeout=ctx.deadline_seconds)
+            resp = await asyncio.wait_for(self._assistant_handler(ctx), timeout=remaining(ctx))
         except asyncio.TimeoutError:
             self._hooks.on_error(provider_id, "assistant_timeout")
             return WebhookResponse(504, {"error": "assistant timeout"})
@@ -341,7 +357,7 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
     if handler is None:
         return ToolResult(tool_call_id=call.tool_call_id, name=call.name, error="unknown tool")
     try:
-        return await asyncio.wait_for(handler(ctx, call), timeout=ctx.deadline_seconds)
+        return await asyncio.wait_for(handler(ctx, call), timeout=remaining(ctx))
     except asyncio.TimeoutError:
         return ToolResult(tool_call_id=call.tool_call_id, name=call.name, error="timeout")
     except Exception:
@@ -415,6 +431,7 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
 
 - 库内不持久化任何请求体；签名校验使用原始 bytes（不预先 JSON 解码）。
 - `raw` 仅在 `ERROR` / `UNKNOWN` 事件中填充，且只经 `hooks.on_raw_payload` 交给消费者，由消费者的 PII 策略决定落库与保留期（PRD §8.4）。
+- 解析异常（adapter 未返回事件）时，原始请求体按 UTF-8 容错解码，最多保留 4096 字符，放入 `ERROR.raw["_body"]`，同样受 `logging.raw_payload` 开关约束。
 - `call_id`、事件类型、耗时、验证结果可进结构化日志；电话号码等 payload 字段默认不进日志。
 
 ## 11. 性能与可观测性
@@ -442,16 +459,18 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
 
 | 字段 | 说明 |
 |------|------|
-| `ts`, `level` | 时间戳、级别 |
-| `provider_id`, `event_type`, `call_id` | 路由与关联键 |
-| `outcome` | `ok` / `verification_failed` / `parse_error` / `timeout` / `handler_error` |
-| `verify_ms`, `normalize_ms`, `dispatch_ms`, `total_ms` | 分段耗时 |
-| `tool_count` | tool-call 批大小 |
-| 不含 | body、电话号码、transcript、凭据 |
+| `kind` | `event` / `error` / `raw` |
+| `provider_id`, `event_type`, `call_id` | 路由与关联键（error 记录仅有 `reason`） |
+| `outcome` | `ok` / `ignored` / `parse_error` / `handler_missing` / `timeout` / `handler_error` |
+| `total_ms` | webhook 入口到应答的总耗时 |
+| `raw` | 仅 `raw` 记录：`ERROR`/`UNKNOWN` 的原始 payload；`raw_payload: off` 时不发 |
+| 不含 | body（除 `raw` 记录）、电话号码、transcript、凭据 |
 
-### 11.4 指标（PRD M3 预留）
+分段耗时（`verify_ms` / `normalize_ms` / `dispatch_ms`）与 `tool_count` 当前未单独发事件；可通过 `VoiceMetrics.normalization` 与 `total_ms` 下钻。新增字段须同步本表与 `StructuredLogHooks`。
 
-`hooks` 暴露计数与直方图接口：验证失败率、事件类型分布、归一化耗时分位、单工具超时率。M1 仅提供接口与日志实现，Prometheus 对接留在消费者侧（库不绑定监控后端）。
+### 11.4 指标（PRD M3）
+
+`metrics.py::VoiceMetrics` 按 provider / event / outcome 累计请求数与耗时，并记录验签结果、归一化次数与总耗时；`registry.metrics` 恒存在。`build_metrics_router(registry)` 暴露 `GET /voice/metrics`（Prometheus 文本格式）；`snapshot()` 提供同源 dict，供其他观测后端接入。库不绑定具体监控后端。
 
 ## 12. 测试策略
 

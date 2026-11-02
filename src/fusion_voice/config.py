@@ -68,6 +68,12 @@ def _reject_unknown(section: dict[str, Any], allowed: set[str], where: str) -> N
         raise ConfigError(f"unknown keys in {where}: {sorted(unknown)}")
 
 
+def _parse_bool(value: Any, where: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ConfigError(f"{where} must be a boolean")
+
+
 def _parse_budgets(raw: Any, index: int) -> BudgetConfig:
     if not isinstance(raw, dict):
         raise ConfigError(f"providers[{index}].budgets must be a mapping")
@@ -103,7 +109,10 @@ def _parse_inbound(raw: Any, index: int) -> InboundConfig:
             allowed_ips.append(str(ipaddress.ip_network(str(item), strict=False)))
         except ValueError as exc:
             raise ConfigError(f"providers[{index}].inbound.allowed_ips invalid entry {item!r}: {exc}") from exc
-    trust_forwarded_for = bool(raw.get("trust_forwarded_for", False))
+    trust_forwarded_for = _parse_bool(
+        raw.get("trust_forwarded_for", False),
+        f"providers[{index}].inbound.trust_forwarded_for",
+    )
     return InboundConfig(
         max_body_bytes=max_body,
         verify=verify,
@@ -119,7 +128,10 @@ def _parse_logging(raw: Any) -> LoggingConfig:
     raw_payload = str(raw.get("raw_payload", "hooks"))
     if raw_payload not in {"hooks", "off"}:
         raise ConfigError("logging.raw_payload must be hooks|off")
-    return LoggingConfig(level=str(raw.get("level", "INFO")), raw_payload=raw_payload)
+    level = str(raw.get("level", "INFO")).upper()
+    if level not in logging.getLevelNamesMapping():
+        raise ConfigError(f"logging.level invalid: {level}")
+    return LoggingConfig(level=level, raw_payload=raw_payload)
 
 
 def load_config(source: str | Path | dict[str, Any]) -> RootConfig:
@@ -163,7 +175,7 @@ def load_config(source: str | Path | dict[str, Any]) -> RootConfig:
         providers[provider_id] = ProviderConfig(
             id=provider_id,
             adapter=adapter,
-            enabled=bool(raw.get("enabled", True)),
+            enabled=_parse_bool(raw.get("enabled", True), f"providers[{index}].enabled"),
             credentials={str(key): str(value) for key, value in credentials.items()},
             options={str(key): value for key, value in options.items()},
             budgets=_parse_budgets(raw.get("budgets") or {}, index),

@@ -93,6 +93,16 @@ def test_invalid_raw_payload_mode():
         load_config({"providers": [], "logging": {"raw_payload": "all"}})
 
 
+def test_invalid_logging_level_rejected():
+    with pytest.raises(ConfigError, match="logging.level"):
+        load_config({"providers": [], "logging": {"level": "verbose"}})
+
+
+def test_logging_level_normalized():
+    config = load_config({"providers": [], "logging": {"level": "debug"}})
+    assert config.logging.level == "DEBUG"
+
+
 def test_options_mapping_passthrough():
     config = load_config(
         {"providers": [{"id": "a", "adapter": "twilio", "options": {"webhook_url": "https://example.com/voice/a"}}]}
@@ -115,6 +125,13 @@ def test_allowed_ips_normalized_to_networks():
 def test_invalid_allowed_ip_rejected():
     with pytest.raises(ConfigError, match="allowed_ips"):
         load_config({"providers": [{"id": "a", "adapter": "vapi", "inbound": {"allowed_ips": ["not-an-ip"]}}]})
+
+
+def test_non_boolean_flags_rejected():
+    with pytest.raises(ConfigError, match="enabled must be a boolean"):
+        load_config({"providers": [{"id": "a", "adapter": "vapi", "enabled": "false"}]})
+    with pytest.raises(ConfigError, match="trust_forwarded_for must be a boolean"):
+        load_config({"providers": [{"id": "a", "adapter": "vapi", "inbound": {"trust_forwarded_for": "yes"}}]})
 
 
 def test_verify_disabled_warns(caplog):

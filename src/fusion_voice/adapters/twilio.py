@@ -75,9 +75,14 @@ class TwilioAdapter(HttpAdapterMixin):
             "to": params.get("To"),
             "direction": params.get("Direction"),
         }
+        timestamp = params.get("Timestamp")
         if status in _STARTED_STATUSES:
+            if timestamp:
+                payload["started_at"] = timestamp
             return VoiceEvent(type=VoiceEventType.CALL_STARTED, call_id=call_id, payload=payload)
         if status in _ENDED_STATUSES:
+            if timestamp:
+                payload["ended_at"] = timestamp
             return VoiceEvent(type=VoiceEventType.CALL_ENDED, call_id=call_id, payload=payload)
         if status:
             return VoiceEvent(type=VoiceEventType.STATUS_UPDATE, call_id=call_id, payload=payload)

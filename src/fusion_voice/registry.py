@@ -44,6 +44,7 @@ class VoiceRegistry:
         metrics: VoiceMetrics | None = None,
     ) -> VoiceRegistry:
         config = load_config(source)
+        logging.getLogger("fusion_voice").setLevel(config.logging.level)
         extra = provider_extra or {}
         adapters: dict[str, VoiceProvider] = {}
         for provider_id, provider in config.providers.items():

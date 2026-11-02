@@ -61,6 +61,17 @@ def test_parse_ended_status():
     assert event.type == VoiceEventType.CALL_ENDED
 
 
+def test_parse_maps_platform_timestamps():
+    started = _adapter().parse_event(
+        urlencode({"CallSid": "CA1", "CallStatus": "ringing", "Timestamp": "2026-11-02T10:00:00Z"}).encode()
+    )
+    ended = _adapter().parse_event(
+        urlencode({"CallSid": "CA1", "CallStatus": "completed", "Timestamp": "2026-11-02T10:05:00Z"}).encode()
+    )
+    assert started.payload["started_at"] == "2026-11-02T10:00:00Z"
+    assert ended.payload["ended_at"] == "2026-11-02T10:05:00Z"
+
+
 def test_parse_in_progress_status():
     event = _adapter().parse_event(urlencode({"CallSid": "CA1", "CallStatus": "in-progress"}).encode())
     assert event.type == VoiceEventType.STATUS_UPDATE

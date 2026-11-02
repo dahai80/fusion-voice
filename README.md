@@ -2,7 +2,7 @@
 
 Voice-agent platform access layer for the Fusion ecosystem: one synchronous SPI and one normalized event model for hosted voice AI platforms.
 
-**Status: M2 and M3 implemented (2026-11-02).** Hot path (webhook verification, event normalization, assistant-request and tool-call responses), cold path (assistant deployment, call transfer, hang-up, call fetch), five platform adapters, and Prometheus-compatible metrics are implemented.
+**Status: M1, M2 and M3 implemented (2026-11-02).** Hot path (webhook verification, event normalization, assistant-request and tool-call responses), cold path (assistant deployment, call transfer, hang-up, call fetch), five platform adapters, and Prometheus-compatible metrics are implemented.
 
 ## Install
 
@@ -57,9 +57,9 @@ Request handling contract:
 | Assistant handler timeout or tool timeout | 504 for assistant; per-tool error result for tools |
 | Handler crash | 500 with redacted body |
 
-Assistant-request and tool-call responses are returned on the same HTTP connection. Tool calls run concurrently, each bounded by the provider's `tool_call_s` budget; a timeout or crash becomes that tool's `error` result and does not fail the batch. Handlers receive the raw request headers (lowercased) in `ctx.headers` alongside `ctx.call_id` and the remaining budget.
+Assistant-request and tool-call responses are returned on the same HTTP connection. Budgets are measured from webhook entry, so signature verification and normalization time is deducted before the handler runs. Tool calls run concurrently, each bounded by the provider's `tool_call_s` budget; a timeout or crash becomes that tool's `error` result and does not fail the batch. Handlers receive the raw request headers (lowercased) in `ctx.headers` alongside `ctx.call_id` and the remaining budget.
 
-Optional IP allowlisting is configured per provider under `inbound.allowed_ips` (CIDR or plain address). Set `inbound.trust_forwarded_for: true` only behind a trusted proxy; the first `X-Forwarded-For` entry is then used. A provider with a non-empty allowlist rejects requests whose client IP is missing or outside every network.
+Optional IP allowlisting is configured per provider under `inbound.allowed_ips` (CIDR or plain address). Set `inbound.trust_forwarded_for: true` only behind a trusted proxy that overwrites or appends the real client address; the rightmost `X-Forwarded-For` entry is then used, so clients cannot prepend a spoofed address. A provider with a non-empty allowlist rejects requests whose client IP is missing or outside every network.
 
 ## Supported platforms
 

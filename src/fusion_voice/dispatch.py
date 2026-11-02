@@ -7,11 +7,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from fusion_voice.budgets import budget_for
-from fusion_voice.models import ToolResult, VoiceEventType, VoiceSessionContext
+from fusion_voice.budgets import budget_for, remaining
+from fusion_voice.models import ToolResult, VoiceEvent, VoiceEventType, VoiceSessionContext
 from fusion_voice.spi import VerificationError
 
 logger = logging.getLogger(__name__)
+
+_MAX_RAW_BODY = 4096
 
 
 @dataclass(slots=True)
@@ -52,6 +54,12 @@ async def dispatch(
             registry.hooks.on_error(provider_id, "verification")
             _record(registry, provider_id, VoiceEventType.UNKNOWN, "unauthorized", started)
             return WebhookResponse(401, {"error": "unauthorized"})
+        except Exception:
+            logger.exception("adapter verification failed unexpectedly provider=%s", provider_id)
+            registry.metrics.record_verification(provider_id, False)
+            registry.hooks.on_error(provider_id, "verification")
+            _record(registry, provider_id, VoiceEventType.UNKNOWN, "unauthorized", started)
+            return WebhookResponse(401, {"error": "unauthorized"})
         registry.metrics.record_verification(provider_id, True)
 
     parse_started = time.monotonic()
@@ -62,16 +70,19 @@ async def dispatch(
         registry.hooks.on_error(provider_id, "parse_exception")
         registry.metrics.record_normalization(provider_id, VoiceEventType.ERROR, _ms(parse_started))
         _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
+        _emit_error_raw(registry, provider_id, None, body)
         return WebhookResponse(400, {"error": "bad payload"})
     normalized_type = VoiceEventType.ERROR if event.type == VoiceEventType.ERROR else event.type
     registry.metrics.record_normalization(provider_id, normalized_type, _ms(parse_started))
     if event.type == VoiceEventType.ERROR:
-        registry.hooks.on_event(provider_id, event, "parse_error", _ms(started))
+        error_event = _emit_error_raw(registry, provider_id, event, body)
+        registry.hooks.on_event(provider_id, error_event, "parse_error", _ms(started))
         _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
         return WebhookResponse(400, {"error": "bad payload"})
 
     ctx = VoiceSessionContext(
         call_id=event.call_id or "",
+        received_at=started,
         deadline_seconds=budget_for(provider, event.type),
         headers=headers,
     )
@@ -112,7 +123,7 @@ async def _dispatch_assistant(
         _record(registry, provider_id, event.type, "handler_missing", started)
         return WebhookResponse(500, {"error": "internal error"})
     try:
-        response = await asyncio.wait_for(handler(ctx), timeout=ctx.deadline_seconds)
+        response = await asyncio.wait_for(handler(ctx), timeout=remaining(ctx))
     except TimeoutError:
         registry.hooks.on_error(provider_id, "assistant_timeout")
         _record(registry, provider_id, event.type, "timeout", started)
@@ -132,12 +143,26 @@ async def _run_tool(registry: Any, ctx: VoiceSessionContext, call: Any) -> ToolR
     if handler is None:
         return ToolResult(tool_call_id=call.tool_call_id, name=call.name, error="unknown tool")
     try:
-        return await asyncio.wait_for(handler(ctx, call), timeout=ctx.deadline_seconds)
+        return await asyncio.wait_for(handler(ctx, call), timeout=remaining(ctx))
     except TimeoutError:
         return ToolResult(tool_call_id=call.tool_call_id, name=call.name, error="timeout")
     except Exception:
         logger.exception("tool handler failed tool=%s", call.name)
         return ToolResult(tool_call_id=call.tool_call_id, name=call.name, error="tool failed")
+
+
+def _emit_error_raw(registry: Any, provider_id: str, event: VoiceEvent | None, body: bytes) -> VoiceEvent:
+    raw = dict(event.raw) if event is not None else {}
+    if not raw:
+        raw = {"_body": body.decode("utf-8", errors="replace")[:_MAX_RAW_BODY]}
+    error_event = VoiceEvent(
+        type=VoiceEventType.ERROR,
+        payload=event.payload if event is not None else {},
+        raw=raw,
+    )
+    if registry.raw_payload_policy == "hooks":
+        registry.hooks.on_raw_payload(provider_id, error_event)
+    return error_event
 
 
 def _ms(started: float) -> float:
@@ -155,7 +180,7 @@ def _ip_allowed(inbound: Any, headers: dict[str, str], client_ip: str | None) ->
     if inbound.trust_forwarded_for:
         forwarded = headers.get("x-forwarded-for", "")
         if forwarded:
-            candidate = forwarded.split(",")[0].strip()
+            candidate = forwarded.split(",")[-1].strip()
     if not candidate:
         return False
     try:
