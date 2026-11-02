@@ -8,8 +8,9 @@
 
 ### 1.1 阶段状态
 
-- **当前处于 PRD M0（孵化）**：SPI 与 vapi adapter 的代码事实在 `business/ai-booking-agent/backend/booking_agent/voice/`（`spi.py` + `vapi_adapter.py`），本仓库尚未落地代码。
-- **本文定义 M1（抽库）的目标形态**：抽库触发条件为「第二个真实消费者」或「第二个 adapter 落地」（PRD §6/§10）。触发前，行为变更发生在消费者仓库；触发后，按本文 §13 迁移，验收标准是消费者集成测试全绿（PRD §9）。
+- **2026-11-02 实施完成**：本仓库已按本文落地 M1 库形态（SPI、事件模型、registry/dispatch、vapi/retell/bland 三个热路径 adapter、FastAPI 路由、测试与示例配置）。vapi 行为以孵化代码为基准；retell/bland 的签名字段与事件名按公开文档实现，沙箱验收仍待 PRD V1 结论。
+- **孵化期事实**：SPI 与 vapi adapter 的原始代码在 `business/ai-booking-agent/backend/booking_agent/voice/`（`spi.py` + `vapi_adapter.py`），抽取验收标准是消费者 `/vapi/webhook` 集成测试全绿（PRD §9），业务侧切换属于消费者仓库的改动。
+- **抽库触发条件不变**：「第二个真实消费者」或「第二个 adapter 落地」（PRD §6/§10）。本仓库先完成实现，触发后执行 §13 的逐字迁移核对。
 - 本文与 PRD 的维护联动：SPI 签名、事件模型、适配器路线变化时，PRD 与本文同一次改动更新。
 
 ### 1.2 实现级硬约束（PRD 的落地表述）
@@ -295,17 +296,17 @@ logging:
 ```python
 async def dispatch(provider_id: str, headers: dict[str, str], body: bytes) -> WebhookResponse:
     started = time.monotonic()
-    adapter = self._adapters.get(provider_id)          # 未知/禁用 provider → 404
+    adapter = self._adapters.get(provider_id)  # 未知/禁用 provider → 404
     if len(body) > self._max_body_bytes:
         return WebhookResponse(413, {"error": "body too large"})
     try:
-        adapter.verify_request(headers, body)          # → 401
+        adapter.verify_request(headers, body)  # → 401
     except VerificationError:
         self._hooks.on_error(provider_id, "verification")
         return WebhookResponse(401, {"error": "unauthorized"})
 
     event = adapter.parse_event(body)
-    if event.type == VoiceEventType.ERROR:             # 已签名但不可解析 → 400 + 审计
+    if event.type == VoiceEventType.ERROR:  # 已签名但不可解析 → 400 + 审计
         self._hooks.on_event(provider_id, event, outcome="parse_error")
         return WebhookResponse(400, {"error": "bad payload"})
 
@@ -323,12 +324,13 @@ async def dispatch(provider_id: str, headers: dict[str, str], body: bytes) -> We
             self._hooks.on_error(provider_id, "assistant_timeout")
             return WebhookResponse(504, {"error": "assistant timeout"})
         except Exception:
-            log.exception("assistant handler failed")   # 服务端日志，应答脱敏
+            log.exception("assistant handler failed")  # 服务端日志，应答脱敏
             return WebhookResponse(500, {"error": "internal error"})
         return WebhookResponse(200, adapter.format_assistant_response(resp))
 
     self._hooks.on_event(provider_id, event, outcome="ok", ms=self._ms(started))
     return WebhookResponse(200, {})
+
 
 async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResult:
     handler = self._tool_handlers.get(call.name)

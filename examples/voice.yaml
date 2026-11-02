@@ -1,0 +1,37 @@
+providers:
+  - id: vapi-main
+    adapter: vapi
+    enabled: true
+    credentials:
+      webhook_secret: env:VAPI_WEBHOOK_SECRET
+      api_key: env:VAPI_API_KEY
+    budgets:
+      assistant_request_s: 7.0
+      tool_call_s: 5.0
+    inbound:
+      max_body_bytes: 1048576
+      verify: required
+
+  - id: retell-main
+    adapter: retell
+    enabled: false
+    credentials:
+      api_key: env:RETELL_API_KEY
+    budgets:
+      assistant_request_s: 7.0
+      tool_call_s: 5.0
+
+  - id: bland-main
+    adapter: bland
+    enabled: false
+    credentials:
+      webhook_secret: env:BLAND_WEBHOOK_SECRET
+      api_key: env:BLAND_API_KEY
+    budgets:
+      assistant_request_s: 7.0
+      tool_call_s: 5.0
+
+unknown_event_policy: record
+logging:
+  level: INFO
+  raw_payload: hooks
