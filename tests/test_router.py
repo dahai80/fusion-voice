@@ -18,10 +18,12 @@ BODY = payload(
 )
 
 
-def _client(registry: VoiceRegistry) -> TestClient:
+def _client(registry: VoiceRegistry, client: tuple[str, int] | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(build_voice_router(registry))
-    return TestClient(app)
+    if client is None:
+        return TestClient(app)
+    return TestClient(app, client=client)
 
 
 def test_route_mounted_at_default_prefix(secret):
@@ -69,11 +71,23 @@ def test_oversized_body_413(secret):
     assert response.status_code == 413
 
 
-def test_ip_allowlist_blocks_test_client(secret):
-    registry = VoiceRegistry.from_config(vapi_config(SECRET, inbound={"allowed_ips": ["127.0.0.1"]}))
-    client = _client(registry)
+def test_ip_allowlist_blocks_client(secret):
+    registry = VoiceRegistry.from_config(vapi_config(SECRET, inbound={"allowed_ips": ["10.0.0.0/8"]}))
+    client = _client(registry, client=("192.168.1.1", 12345))
     response = client.post("/voice/vapi-main", content=BODY, headers={"x-vapi-signature": sign(SECRET, BODY)})
     assert response.status_code == 403
+
+
+def test_ip_allowlist_allows_client(secret):
+    registry = VoiceRegistry.from_config(vapi_config(SECRET, inbound={"allowed_ips": ["10.0.0.0/8"]}))
+
+    @registry.on_assistant_request
+    async def handler(ctx):
+        return AssistantResponse(assistant_id="asst_1")
+
+    client = _client(registry, client=("10.1.2.3", 12345))
+    response = client.post("/voice/vapi-main", content=BODY, headers={"x-vapi-signature": sign(SECRET, BODY)})
+    assert response.status_code == 200
 
 
 def test_metrics_endpoint(secret):

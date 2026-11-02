@@ -19,7 +19,7 @@ cd /Users/dahai/fusion && source .venv/bin/activate   # REQUIRED before any Pyth
 
 cd fusion-voice
 pip install -e ".[test,api]"      # setuptools, packages.find where=["src"]
-pytest tests/                     # asyncio_mode=auto; 205 cases
+pytest tests/                     # asyncio_mode=auto; 236 cases
 FUSION_VOICE_BENCH=1 pytest tests/test_perf.py -q   # p95 overhead budgets
 ruff check . && ruff format .     # E/F/W/I/UP/B/SIM, line-length 120
 ```

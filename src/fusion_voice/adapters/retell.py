@@ -152,6 +152,8 @@ class RetellAdapter(HttpAdapterMixin):
                 response = self._request("POST", "/create-retell-llm", self._llm_payload(spec))
             data = response.json()
             llm_id = str(data.get("llm_id") or data.get("id") or llm_id or "")
+            if not llm_id:
+                raise RuntimeError("retell deploy_assistant returned no llm id")
             response_engine = {"type": "retell-llm", "llm_id": llm_id}
 
         agent_payload: dict[str, Any] = {"agent_name": spec.name}

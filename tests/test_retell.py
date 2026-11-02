@@ -229,3 +229,9 @@ async def test_hang_up():
 async def test_update_without_llm_id_rejected():
     with pytest.raises(ValueError, match="llm_id"):
         await _adapter().deploy_assistant(AssistantSpec(name="x", prompt="p", metadata={"assistant_id": "agent_1"}))
+
+
+async def test_deploy_without_llm_id_rejected():
+    adapter = _adapter(http_transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})))
+    with pytest.raises(RuntimeError, match="no llm id"):
+        await adapter.deploy_assistant(AssistantSpec(name="x", prompt="p"))

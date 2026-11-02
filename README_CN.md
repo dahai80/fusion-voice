@@ -2,7 +2,7 @@
 
 Fusion 生态的语音智能体平台接入层：用一套同步 SPI 与统一事件模型屏蔽托管语音平台差异。
 
-**状态：M2/M3 已实现（2026-11-02）。** 热路径（webhook 验签、事件归一化、assistant-request 与 tool-call 同步响应）、冷路径（助理部署、呼叫转移、挂断、呼叫查询）、五个平台 adapter、Prometheus 兼容指标均已落地。
+**状态：M1/M2/M3 已实现（2026-11-02）。** 热路径（webhook 验签、事件归一化、assistant-request 与 tool-call 同步响应）、冷路径（助理部署、呼叫转移、挂断、呼叫查询）、五个平台 adapter、Prometheus 兼容指标均已落地。
 
 ## 安装
 
@@ -57,9 +57,9 @@ app.include_router(build_voice_router(registry))
 | 助理处理超时 / 工具超时 | 助理 504；工具返回该工具的 error 结果 |
 | 处理器崩溃 | 500，响应体脱敏 |
 
-assistant-request 与 tool-call 的响应走同一条 HTTP 连接。多个 tool call 并发执行，每个受 provider `tool_call_s` 预算约束；超时或崩溃只影响对应工具的错误结果，不会拖垮整批。处理器可在 `ctx.headers` 读到原始请求头（已转小写），与 `ctx.call_id`、剩余预算一同传递。
+assistant-request 与 tool-call 的响应走同一条 HTTP 连接。预算从 webhook 入口开始计时，验签与归一化耗时先从预算中扣除，再交给 handler。多个 tool call 并发执行，每个受 provider `tool_call_s` 预算约束；超时或崩溃只影响对应工具的错误结果，不会拖垮整批。处理器可在 `ctx.headers` 读到原始请求头（已转小写），与 `ctx.call_id`、剩余预算一同传递。
 
-可选 IP 白名单按 provider 配置在 `inbound.allowed_ips`（CIDR 或单个地址）。仅在可信代理后开启 `inbound.trust_forwarded_for: true`，此时使用 `X-Forwarded-For` 的第一段。配置了非空白名单的 provider 会拒绝客户端 IP 缺失或不在任何网段内的请求。
+可选 IP 白名单按 provider 配置在 `inbound.allowed_ips`（CIDR 或单个地址）。仅在可信代理会覆写或追加真实客户端地址时开启 `inbound.trust_forwarded_for: true`，此时使用 `X-Forwarded-For` 的末段，客户端无法在左侧伪造地址。配置了非空白名单的 provider 会拒绝客户端 IP 缺失或不在任何网段内的请求。
 
 ## 支持的平台
 
