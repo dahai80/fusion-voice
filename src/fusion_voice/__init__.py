@@ -1,3 +1,4 @@
+from fusion_voice.metrics import VoiceMetrics
 from fusion_voice.models import (
     AssistantRef,
     AssistantResponse,
@@ -26,6 +27,7 @@ __all__ = [
     "VerificationError",
     "VoiceEvent",
     "VoiceEventType",
+    "VoiceMetrics",
     "VoiceProvider",
     "VoiceRegistry",
     "VoiceSessionContext",

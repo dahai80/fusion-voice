@@ -515,10 +515,39 @@ async def _run_tool(self, ctx: VoiceSessionContext, call: ToolCall) -> ToolResul
 | V1 | Retell/Bland/ElevenLabs 签名与事件细节未实测 | P1 adapter 落地前逐家沙箱探测；`verify_request` 必须有实测依据才注册 | 不影响 M1（vapi 单 adapter） |
 | V2 | 各平台 tool-call 同步超时上限 5–10s 差异 | `tool_call_s` 默认 5.0、可配 ≤10；per-provider 独立配置 | 预算透传语义已支持，不改架构 |
 | V3 | AssistantSpec 跨平台表达能力上限 | M1 仅公共交集；平台特有能力走 `platform_extra` | 新增平台能力时不改 SPI |
-| V4 | Twilio ConversationRelay 是否纳入 connector 形态 | P2 观察，不承诺；如纳入，其签名/事件模型差异在 adapter 内消化 | 不影响 M1/M2 |
+| V4 | Twilio ConversationRelay 是否纳入 connector 形态 | 已实现 HTTP 部分（签名状态回调 + REST 呼叫控制）；ConversationRelay 的 WebSocket 媒体/工具流量不纳入同步连接器，若未来需要单独设计 WS 入口 | WS 部分不在本库能力内，需消费者或独立组件承接 |
 
 ## 16. 文档维护
 
 - 与 PRD 的联动：SPI 签名、事件模型、适配器路线、待确认项结论变化时，PRD 与本文同一次改动更新（PRD §12 维护规则）。
 - 触发本文更新的具体情形：热/冷路径边界变化；配置 schema 变化；状态码矩阵变化；与 fusion-channel 的依赖方向变化；M1 抽取完成或回滚。
 - 本文不记录变更历史；用当前事实替换过期表述。
+
+## 17. M2 扩展实现（五平台）
+
+### 17.1 适配器矩阵（当前事实）
+
+| Adapter | 验签 | 热路径事件 | 冷路径 |
+|---------|------|-----------|--------|
+| `vapi` | `x-vapi-signature` HMAC-SHA256 hex | assistant-request / tool-calls / status / 结束报告 / 转接请求 | 部署（POST/PATCH `/assistant`）、转移、挂断、查询 |
+| `retell` | `x-retell-signature` HMAC-SHA256（兼容 `sha256=` 前缀） | call_inbound / tool call / 生命周期 | 部署（`/create-retell-llm` + `/create-agent`，更新用 `/update-*`）、转移、挂断、查询 |
+| `bland` | `x-bland-signature` HMAC-SHA256 | tool / claim / 生命周期 / 转移挂断请求 | 部署（`options.deploy_path`，默认 `/v1/agents`）、转移（`/v1/calls/{id}/transfer`）、挂断（`/v1/calls/{id}/stop`）、查询 |
+| `twilio` | `X-Twilio-Signature` HMAC-SHA1（URL + 排序表单参数，复用 fusion-channel） | 状态回调映射为 CALL_STARTED / STATUS_UPDATE / CALL_ENDED | 号码配置（`IncomingPhoneNumbers`）、TwiML 转移、`Status=completed` 挂断、查询 |
+| `elevenlabs` | `elevenlabs-signature`：`t=<ts>,v1=<hex>`，HMAC-SHA256 over `<ts>.<body>`，默认 300s 防重放 | server tool 回调 / post-call 事件 | agent create/update、会话查询；实时转移/挂断无公开 REST，显式 `NotImplementedError` |
+
+### 17.2 配置扩展
+
+- provider 级新增 `options:` 映射，原样合并进 adapter 配置（`budgets`/`inbound` 之后、`provider_extra` 之前）。adapter 私有参数（Twilio `webhook_url`、各平台路径覆盖、ElevenLabs `signature_tolerance_s`）只走这里，不新增顶层 provider 字段。
+- Twilio 验签必须知道公开 webhook URL（签名覆盖 URL + 表单参数），缺失时 fail-closed 抛 `VerificationError`。
+- `ToolSpec` 新增 `metadata` escape hatch：部署时原样并入平台工具定义（Retell 的 `url`、ElevenLabs 的 webhook 配置等），保持公共交集字段稳定。
+
+### 17.3 未实测边界
+
+Retell/Bland/Twilio/ElevenLabs 的字段名与端点依据公开文档实现，尚未沙箱实测（PRD V1）。所有路径均可通过 `options` 覆盖，修正不改核心库。
+
+## 18. M3 观测实现
+
+- `VoiceMetrics`（`metrics.py`）：线程安全计数器，维度为 `(provider_id, event_type, outcome)` 的请求数与累计耗时，以及 `(provider_id, ok|fail)` 验签结果。热路径仅做内存自增，无 I/O。
+- 记账点位于 dispatch：413/401/400/504/500 与正常 200 均记 outcome；验签成功与失败分别记账；`UNKNOWN` 被 drop 时记 `ignored`。
+- 输出：`registry.metrics.snapshot()` 返回字典，`render_prometheus()` 生成 Prometheus 文本；`build_metrics_router(registry)` 暴露 `GET /voice/metrics`。
+- 指标序列：`fusion_voice_requests_total`、`fusion_voice_request_duration_ms_sum`、`fusion_voice_verification_total`。不引入 Prometheus 客户端依赖，由 Fusion 可观测性侧抓取。

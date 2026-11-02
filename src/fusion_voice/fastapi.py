@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from fusion_voice.registry import VoiceRegistry
 
@@ -20,5 +20,18 @@ def build_voice_router(registry: VoiceRegistry, prefix: str = "/voice") -> APIRo
         result = await registry.dispatch(provider_id, headers, body)
         logger.debug("webhook handled provider=%s status=%d", provider_id, result.status)
         return JSONResponse(status_code=result.status, content=result.body)
+
+    return router
+
+
+def build_metrics_router(registry: VoiceRegistry, prefix: str = "/voice") -> APIRouter:
+    router = APIRouter(prefix=prefix)
+
+    @router.get("/metrics")
+    async def metrics() -> PlainTextResponse:
+        return PlainTextResponse(
+            registry.metrics.render_prometheus(),
+            media_type="text/plain; version=0.0.4",
+        )
 
     return router

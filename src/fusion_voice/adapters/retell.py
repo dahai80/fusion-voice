@@ -122,14 +122,62 @@ class RetellAdapter(HttpAdapterMixin):
             ]
         }
 
+    def _llm_payload(self, spec: AssistantSpec) -> dict[str, Any]:
+        payload: dict[str, Any] = {"model": spec.model or "gpt-4o-mini"}
+        if spec.prompt:
+            payload["general_prompt"] = spec.prompt
+        if spec.tools:
+            payload["general_tools"] = [
+                {
+                    "type": "custom",
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                    **tool.metadata,
+                }
+                for tool in spec.tools
+            ]
+        return payload
+
     async def deploy_assistant(self, spec: AssistantSpec) -> AssistantRef:
-        raise NotImplementedError("retell deploy_assistant lands in M2 (PRD section 10)")
+        assistant_id = spec.metadata.get("assistant_id") or spec.metadata.get("agent_id")
+        llm_id = spec.metadata.get("llm_id")
+        response_engine: dict[str, Any] = {}
+        if llm_id or spec.prompt or spec.model or spec.tools:
+            if not llm_id and assistant_id:
+                raise ValueError("retell update requires metadata.llm_id for prompt/model/tools changes")
+            if llm_id:
+                response = self._request("PATCH", f"/update-retell-llm/{llm_id}", self._llm_payload(spec))
+            else:
+                response = self._request("POST", "/create-retell-llm", self._llm_payload(spec))
+            data = response.json()
+            llm_id = str(data.get("llm_id") or data.get("id") or llm_id or "")
+            response_engine = {"type": "retell-llm", "llm_id": llm_id}
+
+        agent_payload: dict[str, Any] = {"agent_name": spec.name}
+        if spec.voice.get("voice_id"):
+            agent_payload["voice_id"] = spec.voice["voice_id"]
+        if response_engine:
+            agent_payload["response_engine"] = response_engine
+        agent_payload.update(spec.platform_extra)
+        if assistant_id:
+            response = self._request("PATCH", f"/update-agent/{assistant_id}", agent_payload)
+        else:
+            response = self._request("POST", "/create-agent", agent_payload)
+        data = response.json()
+        resolved = str(data.get("agent_id") or data.get("id") or assistant_id or "")
+        logger.info("retell assistant deployed id=%s", resolved)
+        return AssistantRef(provider_id=self.provider_id, assistant_id=resolved)
 
     async def transfer_call(self, call_ref: CallRef, target: str) -> None:
-        raise NotImplementedError("retell transfer_call lands in M2 (PRD section 10)")
+        path = self.config.get("transfer_path") or "/transfer-call"
+        self._request("POST", path, {"call_id": call_ref.call_id, "transfer_phone_number": target})
+        logger.info("retell call transfer call_id=%s", call_ref.call_id)
 
     async def hang_up(self, call_ref: CallRef) -> None:
-        raise NotImplementedError("retell hang_up lands in M2 (PRD section 10)")
+        path = self.config.get("end_call_path") or f"/end-call/{call_ref.call_id}"
+        self._request("POST", path)
+        logger.info("retell call hang_up call_id=%s", call_ref.call_id)
 
     async def fetch_call(self, call_ref: CallRef) -> CallRecord:
         response = self._request("GET", f"/get-call/{call_ref.call_id}")

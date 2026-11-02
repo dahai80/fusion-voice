@@ -93,6 +93,18 @@ def test_invalid_raw_payload_mode():
         load_config({"providers": [], "logging": {"raw_payload": "all"}})
 
 
+def test_options_mapping_passthrough():
+    config = load_config(
+        {"providers": [{"id": "a", "adapter": "twilio", "options": {"webhook_url": "https://example.com/voice/a"}}]}
+    )
+    assert config.providers["a"].options == {"webhook_url": "https://example.com/voice/a"}
+
+
+def test_options_must_be_mapping():
+    with pytest.raises(ConfigError, match="options must be a mapping"):
+        load_config({"providers": [{"id": "a", "adapter": "twilio", "options": ["x"]}]})
+
+
 def test_verify_disabled_warns(caplog):
     config = load_config({"providers": [{"id": "a", "adapter": "vapi", "inbound": {"verify": "disabled"}}]})
     assert config.providers["a"].inbound.verify == "disabled"

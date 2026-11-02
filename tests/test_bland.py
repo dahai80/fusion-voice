@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from fusion_voice import AssistantResponse, CallRef, ToolResult, VoiceEventType
+from fusion_voice import AssistantResponse, AssistantSpec, CallRef, ToolResult, ToolSpec, VoiceEventType
 from fusion_voice.adapters.bland import BlandAdapter
 from fusion_voice.spi import VerificationError
 from tests.conftest import payload, sign
@@ -123,11 +123,55 @@ async def test_fetch_call():
     assert record.transcript == "hi"
 
 
-async def test_cold_management_not_implemented():
-    adapter = _adapter()
-    with pytest.raises(NotImplementedError):
-        await adapter.deploy_assistant(None)
-    with pytest.raises(NotImplementedError):
-        await adapter.transfer_call(CallRef(provider_id="bland", call_id="c"), "+1")
-    with pytest.raises(NotImplementedError):
-        await adapter.hang_up(CallRef(provider_id="bland", call_id="c"))
+async def test_deploy_assistant_creates_agent():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"assistant_id": "agent_1"})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    spec = AssistantSpec(
+        name="booking",
+        prompt="Book appointments.",
+        model="gpt-4o-mini",
+        voice={"voice_id": "v1"},
+        tools=[ToolSpec(name="book", description="Book", metadata={"url": "https://x"})],
+    )
+    ref = await adapter.deploy_assistant(spec)
+    assert ref.assistant_id == "agent_1"
+    assert calls[0].method == "POST"
+    assert calls[0].url.path == "/v1/agents"
+    sent = calls[0].read().decode()
+    assert '"prompt":"Book appointments."' in sent
+    assert '"url":"https://x"' in sent
+
+
+async def test_deploy_assistant_updates_agent():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"assistant_id": "agent_1"})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    spec = AssistantSpec(name="booking", metadata={"assistant_id": "agent_1"})
+    ref = await adapter.deploy_assistant(spec)
+    assert ref.assistant_id == "agent_1"
+    assert calls[0].method == "PATCH"
+    assert calls[0].url.path == "/v1/agents/agent_1"
+
+
+async def test_transfer_and_hang_up():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    await adapter.transfer_call(CallRef(provider_id="bland", call_id="call_1"), "+15550000003")
+    await adapter.hang_up(CallRef(provider_id="bland", call_id="call_1"))
+    assert calls[0].url.path == "/v1/calls/call_1/transfer"
+    assert b'"transfer_number":"+15550000003"' in calls[0].content
+    assert calls[1].url.path == "/v1/calls/call_1/stop"

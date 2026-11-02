@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from fusion_voice import AssistantResponse, CallRef, ToolResult, VoiceEventType
+from fusion_voice import AssistantResponse, AssistantSpec, CallRef, ToolResult, ToolSpec, VoiceEventType
 from fusion_voice.adapters.retell import RetellAdapter
 from fusion_voice.spi import VerificationError
 from tests.conftest import payload, sign
@@ -149,11 +149,83 @@ async def test_fetch_call():
     assert record.transcript == "hi"
 
 
-async def test_cold_management_not_implemented():
-    adapter = _adapter()
-    with pytest.raises(NotImplementedError):
-        await adapter.deploy_assistant(None)
-    with pytest.raises(NotImplementedError):
-        await adapter.transfer_call(CallRef(provider_id="retell", call_id="c"), "+1")
-    with pytest.raises(NotImplementedError):
-        await adapter.hang_up(CallRef(provider_id="retell", call_id="c"))
+async def test_deploy_assistant_creates_llm_and_agent():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path == "/create-retell-llm":
+            return httpx.Response(200, json={"llm_id": "llm_1"})
+        return httpx.Response(200, json={"agent_id": "agent_1"})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    spec = AssistantSpec(
+        name="booking",
+        prompt="Book appointments.",
+        model="gpt-4o-mini",
+        voice={"voice_id": "v1"},
+        tools=[ToolSpec(name="book", description="Book", metadata={"url": "https://x"})],
+    )
+    ref = await adapter.deploy_assistant(spec)
+    assert ref.assistant_id == "agent_1"
+    assert [call.url.path for call in calls] == ["/create-retell-llm", "/create-agent"]
+    llm_payload = calls[0].read().decode()
+    assert '"general_prompt":"Book appointments."' in llm_payload
+    assert '"url":"https://x"' in llm_payload
+    agent_payload = calls[1].read().decode()
+    assert '"response_engine":{"type":"retell-llm","llm_id":"llm_1"}' in agent_payload
+    assert '"voice_id":"v1"' in agent_payload
+
+
+async def test_deploy_assistant_updates_existing():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if "retell-llm" in request.url.path:
+            return httpx.Response(200, json={"llm_id": "llm_1"})
+        return httpx.Response(200, json={"agent_id": "agent_1"})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    spec = AssistantSpec(
+        name="booking",
+        prompt="Updated.",
+        metadata={"assistant_id": "agent_1", "llm_id": "llm_1"},
+    )
+    ref = await adapter.deploy_assistant(spec)
+    assert ref.assistant_id == "agent_1"
+    assert calls[0].method == "PATCH"
+    assert calls[0].url.path == "/update-retell-llm/llm_1"
+    assert calls[1].method == "PATCH"
+    assert calls[1].url.path == "/update-agent/agent_1"
+
+
+async def test_transfer_call():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    await adapter.transfer_call(CallRef(provider_id="retell", call_id="call_1"), "+15550000003")
+    assert calls[0].url.path == "/transfer-call"
+    assert b'"transfer_phone_number":"+15550000003"' in calls[0].content
+
+
+async def test_hang_up():
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    adapter = _adapter(http_transport=httpx.MockTransport(handler))
+    await adapter.hang_up(CallRef(provider_id="retell", call_id="call_1"))
+    assert calls[0].method == "POST"
+    assert calls[0].url.path == "/end-call/call_1"
+
+
+async def test_update_without_llm_id_rejected():
+    with pytest.raises(ValueError, match="llm_id"):
+        await _adapter().deploy_assistant(AssistantSpec(name="x", prompt="p", metadata={"assistant_id": "agent_1"}))

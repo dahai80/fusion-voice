@@ -28,23 +28,29 @@ async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], bod
     provider = registry.provider_config(provider_id)
     if len(body) > provider.inbound.max_body_bytes:
         registry.hooks.on_error(provider_id, "body_too_large")
+        _record(registry, provider_id, VoiceEventType.UNKNOWN, "body_too_large", started)
         return WebhookResponse(413, {"error": "body too large"})
 
     if provider.inbound.verify != "disabled":
         try:
             adapter.verify_request(headers, body)
         except VerificationError:
+            registry.metrics.record_verification(provider_id, False)
             registry.hooks.on_error(provider_id, "verification")
+            _record(registry, provider_id, VoiceEventType.UNKNOWN, "unauthorized", started)
             return WebhookResponse(401, {"error": "unauthorized"})
+        registry.metrics.record_verification(provider_id, True)
 
     try:
         event = adapter.parse_event(body)
     except Exception:
         logger.exception("adapter parse failed provider=%s", provider_id)
         registry.hooks.on_error(provider_id, "parse_exception")
+        _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
         return WebhookResponse(400, {"error": "bad payload"})
     if event.type == VoiceEventType.ERROR:
         registry.hooks.on_event(provider_id, event, "parse_error", _ms(started))
+        _record(registry, provider_id, VoiceEventType.UNKNOWN, "parse_error", started)
         return WebhookResponse(400, {"error": "bad payload"})
 
     ctx = VoiceSessionContext(
@@ -55,6 +61,7 @@ async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], bod
     if event.type == VoiceEventType.TOOL_CALL:
         results = await asyncio.gather(*(_run_tool(registry, ctx, call) for call in event.tool_calls))
         registry.hooks.on_event(provider_id, event, "ok", _ms(started))
+        _record(registry, provider_id, event.type, "ok", started)
         return WebhookResponse(200, adapter.format_tool_results(list(results)))
 
     if event.type == VoiceEventType.ASSISTANT_REQUEST:
@@ -64,10 +71,12 @@ async def dispatch(registry: Any, provider_id: str, headers: dict[str, str], bod
         registry.hooks.on_raw_payload(provider_id, event)
     if event.type == VoiceEventType.UNKNOWN and registry.unknown_event_policy == "drop":
         registry.hooks.on_event(provider_id, event, "ignored", _ms(started))
+        _record(registry, provider_id, event.type, "ignored", started)
         return WebhookResponse(200, {})
 
     registry.emit_event(provider_id, event)
     registry.hooks.on_event(provider_id, event, "ok", _ms(started))
+    _record(registry, provider_id, event.type, "ok", started)
     return WebhookResponse(200, {})
 
 
@@ -82,17 +91,21 @@ async def _dispatch_assistant(
     handler = registry.assistant_handler
     if handler is None:
         registry.hooks.on_error(provider_id, "assistant_handler_missing")
+        _record(registry, provider_id, event.type, "handler_missing", started)
         return WebhookResponse(500, {"error": "internal error"})
     try:
         response = await asyncio.wait_for(handler(ctx), timeout=ctx.deadline_seconds)
     except TimeoutError:
         registry.hooks.on_error(provider_id, "assistant_timeout")
+        _record(registry, provider_id, event.type, "timeout", started)
         return WebhookResponse(504, {"error": "assistant timeout"})
     except Exception:
         logger.exception("assistant handler failed provider=%s", provider_id)
         registry.hooks.on_error(provider_id, "assistant_handler_error")
+        _record(registry, provider_id, event.type, "handler_error", started)
         return WebhookResponse(500, {"error": "internal error"})
     registry.hooks.on_event(provider_id, event, "ok", _ms(started))
+    _record(registry, provider_id, event.type, "ok", started)
     return WebhookResponse(200, adapter.format_assistant_response(response))
 
 
@@ -111,3 +124,7 @@ async def _run_tool(registry: Any, ctx: VoiceSessionContext, call: Any) -> ToolR
 
 def _ms(started: float) -> float:
     return (time.monotonic() - started) * 1000.0
+
+
+def _record(registry: Any, provider_id: str, event_type: str, outcome: str, started: float) -> None:
+    registry.metrics.record_request(provider_id, event_type, outcome, _ms(started))
