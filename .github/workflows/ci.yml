@@ -16,6 +16,13 @@ on:
       - "examples/**"
       - "LICENSE"
       - ".gitignore"
+  workflow_dispatch:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "examples/**"
+      - "LICENSE"
+      - ".gitignore"
 
 concurrency:
   group: ci-${{ github.ref }}
