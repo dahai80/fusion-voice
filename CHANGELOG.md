@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-11-16
+
+### Added
+
+- GitHub Actions CI: lint, tests, and performance gate on Python 3.12, with pip caching, run cancellation for superseded pushes, and docs-only paths ignored (#1, #2).
+
+### Security
+
+- Commit history rewritten to GitHub noreply emails; no personal email addresses in any commit on GitHub.
+
 ## [0.1.0] - 2026-11-02
 
 First release of the Fusion voice-agent platform access layer.
